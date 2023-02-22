@@ -3,7 +3,7 @@ Not talking actual real-time with a real-time OS and dedicated hardware,
 talking about doing the best we can on consumer machines.
 Not the entire application need to be real-time, just the data processing.
 Interactive elements and some I/O often have much weaker requirements.
-We mark functions as being "real-time safe", meaning that have bounds on their runtime.
+We mark functions as being "real-time safe", meaning that they have bounds on their runtime.
 Such functions have restrictions, things they may not do.
 
 Application is like a pipe with data flowing through.
@@ -15,7 +15,7 @@ Real-time means to put an upper limit on latency.
 Common architecture:
 - A callback given a set of data that is to be processed.
 - The callback is called with a fixed frequency.
-- Must complete one set before the next arrives.
+- Must complete one set of data before the next arrives.
 
 For trading, fastest wins. Optimize for average.
 
@@ -42,6 +42,7 @@ Properties of real-time safe code:
 	- Most platforms have only a very small cost if no exception is actually thrown. MSVC 32-bit has overhead.
 
 There is often a real-time thread, which is a thread with high scheduling priority.
+Our callback is called by this thread.
 
 The standard library specification doesn't say which functions are real-time safe or not.
 It often doesn't even say if it does the things we don't want in real-time code.
@@ -63,14 +64,18 @@ Known to be real-time safe:
 	- To share values and updates between threads
 	- To build lock-free queues.
 	- To build a spinlock.
-	- Beware that for non-primitive data types the compiler may add a mutex behind the scenes, making an `std::atomic` non-real-time safe.
+	- Beware that for non-primitive data types the compiler may add a mutex behind the scenes, making an `std::atomic` not real-time safe.
 
 Known to be not real-time safe:
 - `std::stable_sort`
+	- Why not? Allocates memory?
 - `std::stable_partition`
+	- Why not? Allocates memory?
 - `std::inplace_merge`
+	- Why not? Allocates memory?
 - `std::execution::parallel_*`
 - All containers except for `std::array`.
+	- Reallocation, rehashing, (more?)
 - `std::any` and `std::function`
 	- Type-erasure, require heap allocation since the size isn't known at compile time.
 	- Unless you are saved by small object optimization, dangerous to rely on.
@@ -83,6 +88,8 @@ Known to be not real-time safe:
 	- For example `mutex`, `lock`, `condition_variable`, `semaphore`, `barrier`, and such.
 	- Interacts with the thread scheduler.
 	- Not even `try_to_lock` because even though trying to take the lock is safe, releasing it later might wake up another thread which may be bad.
+		- Don't see why this would be bad, that other thread could have been running already anyway.
+		- Of is the act of waking potentially costly, blocking?
 	- The one exception is `std::atomic`, that is real-time safe. See _known to be real-time safe_ above.
 
 
