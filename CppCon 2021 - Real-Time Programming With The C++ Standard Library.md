@@ -59,6 +59,11 @@ Known to be real-time safe:
 	- Are allocated on the stack.
 	- But beware for passing it to a function that takes it as a `std::function`.
 	- Instead template the receiving function on the function type, then its not type erasure anymore.
+- `std::atomic`
+	- To share values and updates between threads
+	- To build lock-free queues.
+	- To build a spinlock.
+	- Beware that for non-primitive data types the compiler may add a mutex behind the scenes, making an `std::atomic` non-real-time safe.
 
 Known to be not real-time safe:
 - `std::stable_sort`
@@ -73,6 +78,12 @@ Known to be not real-time safe:
 	- Creation may perform dynamic memory allocation.
 	- The compiler may optimize the memory allocation away, but don't depend on it.
 	- Can create the coroutine ahead of time, calling it is real-time safe.
+	- Also something about custom `promise` type with custom `operator new` and `operator delete`.
+- Anything concerning thread synchronization.
+	- For example `mutex`, `lock`, `condition_variable`, `semaphore`, `barrier`, and such.
+	- Interacts with the thread scheduler.
+	- Not even `try_to_lock` because even though trying to take the lock is safe, releasing it later might wake up another thread which may be bad.
+	- The one exception is `std::atomic`, that is real-time safe. See _known to be real-time safe_ above.
 
 
 # Containers
