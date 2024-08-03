@@ -1,9 +1,40 @@
 A signed integer type is one that can represent both positive and negative numbers, and zero.
 An unsigned integer is one that can only represent positive numbers, and zero.
+The purpose for this note is to explore the pros and cons of using each in cases where it is not obvious, such as for indexing.
+There is no universally agreed upon choice.
 
 In this note `integer_t` is an integer type that is either `std::size_t` or `std::ptrdiff_t` depending on if we use signed or unsigned indexing.
 Or some other pair of signed/unsigned integers.
 In this note `Container` represents any container type that has `std::size_t size() const` and `T& operator[](size_t)` member function, for example `std::vector`.
+In this note, `isValidIndex` is the following overloaded function, unless context makes it clear that something else is meant:
+```cpp
+template <typename Container>
+bool isValidIndex(const Container& container, std::size_t index)
+{
+	return index < container.size();
+}
+
+template <typename Container>
+bool isValidIndex(const Container& container, std::ptrdiff_t index)
+{
+	// Negative indices are never valid.
+	if (index < 0)
+	{
+		return false;
+	}
+
+	// Sanity check of the container, _probably_ not necessary.
+	// Can the below error report ever trigger?
+	const std::size_t max_possible_index =
+		static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max());
+	if (container.size() > max_possible_index)
+	{
+		report_error("Container too large for signed indexing");
+	}
+
+	return index < std::ssize(container);
+}
+```
 
 In this note "arithmetic underflow" refers to an arithmetic operation that should produce a result that is smaller than the smallest value representable by the return type.
 For a signed type that is some large negative value.
@@ -16,7 +47,7 @@ Unsigned numbers are allowed to overflow and underflow and wrap around.
 This is called modular arithmetic.
 
 Because overflow of signed integers is undefined behavior the compiler does not need to consider this case when generating machine code.
-This can in some cases produce more efficient code (citation needed).
+This can in some cases produce more efficient code (`citation needed`).
 
 Since there are a number of bugs stepping from unintended conversions between signed and unsigned integer types many compilers include warnings for this, often enabled with `-Wconversion`, `-Wsign-conversion`, and/or `-Wsign-compare`.
 
@@ -102,12 +133,20 @@ void work(std::span<byte> data)
 # Standard Library
 
 Many containers in the standard library use `size_t`, which is an unsigned type, for indexing and counts.
+I assume that the standard library designers know what they are doing.
+It is a sign indicating that we should do the same, and that we should use unsigned integer when working with the standard library.
+Not everyone agrees, not even the standard library maintainers (`citation needed`).
+It may be that it was the correct decision at the time, but things changed (e.g. 16-bit to 32-bit to 64-bit CPUs.) and now we are stuck with what we have for legacy / consistency / backwards compatibility reasons.
+The design of any API that is difficult to change by definition happens before widespread usage of that API, and it is not until widespread usage we we discover real-world implications that wasn't though of beforehand.
 
 There is `std::ssize(const T& container)` that returns the size of the container as a signed integer.
 
-I don't know of any way to index with a signed index.
-This is a major problem.
-The only recommendation I've seen is to not do direct indexing and instead use ranged base for loops,  iterators, named algorithms, ranges, ... (TODO More to add here?).
+I don't know of any way to index with a signed index, other than passing in the signed index and letting it implicit convert to the unsigned equivalent.
+I've seen two recommendations:
+- Don't do direct indexing and instead use ranged base for loops,  iterators, named algorithms, ranges, ... (TODO More to add here?).
+- Pass the signed value to `operator[]`.
+	- This will work as long as the value is non-negative, so make sure you have a check for that or some other way to guarantee it.
+	- Disable the `sign-conversion` warning since every indexing will trigger it.
 
 `std::next` and `std::prev` uses a signed type.
 
@@ -262,6 +301,69 @@ Unless we chose to use a different set of containers that use a signed integer t
 
 A goal should be to keep this front-of-mixed-signed-ness as small as possible.
 
+## Mostly Safe Conversions To Unsigned
+
+It is usually safe to pass a signed integer value in a call to a function taking an unsigned integer parameter.
+This includes `operator[]` in the standard library containers.
+We need to ensure that the value is in range of the container, but that is true regardless.
+We can enable warnings for when we do this if we want, `-Wsign-conversion`, but we can also chose not to enable those and just let the conversion happen.
+
+This is fine even with a negative offset:
+```cpp
+bool work(
+	Container& container,
+	signed int base, signed int offset, signed int stride
+)
+{
+	signed int index = base + offset * stride;
+	if (!isValidIndex(container, index))
+	{
+		report_error(
+			"Cannot do work, work item is not a valid index for container.");
+		return false;
+	}
+	
+	// Workd with container[index].
+
+	return true;
+}
+```
+
+The same with unsigned integers is not fine.
+Note that only `offset` is signed since that is the only value that can be negative.
+```cpp
+bool work(
+	Container& container,
+	unsigned int base, signed int offset, unsigned int stride
+)
+{
+	// Here be footguns.
+	unsigned int index = base + offset * stride;
+	if (!isValidIndex(container, index))
+	{
+		report_error(
+			"Cannot do work, work item is not a valid index for container.");
+		return false;
+	}
+
+	// Work with container[index];
+
+	return true;
+}
+```
+
+The problem is that `offset * stride` may be more "negative" than `base` is positive.
+The we get underflow and a large positive value instead.
+In most cases this will assert in a debug build since the resulting index often will be out-of-bounds of the container, but in release we have a memory error and undefined behavior.
+It will not assert if the wrapping is so large that it goes all the way back to valid indices again,
+in which case we get incorrect behavior, neither a compiler nor sanitizer warning, and possibly a hard-to-locate bug.
+
+"Negative" is in quotes above because the implicit conversion for the multiplication will be signed → unsigned, thus there will be no negative value.
+The computation will be correct with correct usage anyway because of the wrapping behavior or unsigned integer types.
+
+A similar problem can happen with the singed version as well, `offset * stride` or `base + offset * stride` can either underflow or overflow the range of the singed integer type. 
+but in that case an undefined behavior sanitizer will report the error as soon as the incorrect index is calculated since signed integer overflow isn't allowed.
+
 
 # Disadvantages Of Unsigned
 
@@ -293,7 +395,7 @@ What should `VERY_LARGE_NUMBER` be set to?
 The smaller we set it to the more cases of underflow we are able to detect, but we also further restrict the set of allowed sizes for the container.
 The larger we set it the bigger containers we support, but we risk missing underflows that wrap past the boundary and incorrectly enter into the legal range again.
 
-Signed types also has the same problem, but it is less frequent in practice (citation needed) since the underflow happens a much farther away from commonly used numbers.
+Signed types also has the same problem, but it is less frequent in practice (`citation needed`) since the underflow happens a much farther away from commonly used numbers.
 For unsigned types the underflow happens near 0 and a lot of real-world arithmetic is done near 0.
 Also, underflow with signed integer types is undefined behavior.
 
@@ -427,3 +529,5 @@ struct Positive
 - 3: [_C++ Core Guidelines_ > _ES.102: Use signed types for arithmetic_](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es102-use-signed-types-for-arithmetic)
 - 4: [_C++ Core Guidelines_ > _ES.106: Don’t try to avoid negative values by using unsigned_](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es106-dont-try-to-avoid-negative-values-by-using-unsigned)
 - 5: [_C++ Core Guidelines_ > ES.107: Don’t use unsigned for subscripts, prefer gsl::index](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es107-dont-use-unsigned-for-subscripts-prefer-gslindex)
+- 6: [_Why are there no signed overloads of operator[](size_type index) in the standard library containers?_ @ reddit.com/cpp_questions](https://www.reddit.com/r/cpp_questions/comments/1ej5mo0/why_are_there_no_signed_overloads_of_operatorsize/)
+
