@@ -140,6 +140,9 @@ I would prefer to keep the sign-conversion warning enabled, but I'm not sure tha
 
 ## Changing The Type Of A Variable Or Return Value
 
+Without warnings is can be difficult to find all the places where changing the type of a variable or function's return type changes the behavior of the code that uses it.
+IDE's and other tools can help within the same project but projects that use our code is more difficult.
+The developers on that project may not even be aware that the type changed.
 
 ## /
 
@@ -239,6 +242,9 @@ I'm not sure when this will become a restriction for 64-bit signed indices, the 
 
 If we chose a signed integer instead then we need to motivate the loss of maximum size.
 
+However, having the extra bit does not mean it is actually used.
+At least [GCC's standard library implementation of `vector` is limited](https://github.com/gcc-mirror/gcc/blob/releases/gcc-11.4.0/libstdc%2B%2B-v3/include/bits/stl_vector.h#L1776) to the range of `std::ptrdiff_t`, and the same is stated under _Note_ on [cppreference.com/vector/max_size](https://en.cppreference.com/w/cpp/container/vector/max_size).
+
 ## Single-Comparison Range Checks
 
 Only need to check one side of the range for indexing.
@@ -251,8 +257,11 @@ if (index >= container.size())
 if (index < 0 || index >= container.size())
 ```
 
-This assumes the computation of `index` didn't underflow, which is impossible to detect after the fact.
+This assumes the computation of `index` didn't underflow before we got here, which is impossible to detect after the fact.
 See _Disadvantages Of Unsigned_ > _Impossible To Detect Underflow_ for a longer discussion on this.
+
+This may come with a performance improvement dues to the smaller number of instructions,
+but that is unlikely on a modern computer in most cases since the number of loads is the same and ALU saturation is rarely the limiting factor for execution speed [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf).
 
 ## Most Values Are Positive And Positive Values Rarely Mix With Negative Values
 
@@ -439,6 +448,36 @@ void work(Container& container)
 }
 ```
 
+Negative values often appear from subtractions and it can be non-obvious that the left hand side may be smaller than the right hand side [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf).
+```cpp
+std::size_t area(std::size_t width, std::size_t height)
+{
+	return width * height;
+}
+
+void work(
+	std::size_t width1, std::size_t height1,
+	std::size_t width2, std::size_t height2)
+{
+	std::size_t area = area(
+		width1 - width2,
+		height1 - height2);
+}
+```
+
+(
+What follows is me speculating and writing without thinking, it's draft text.
+)
+
+Mixing `while (unsigned < signed)`, the opposite of the common case, is safer that `while (signed < unsigned)`, the common case, when the right hand side is guaranteed to be positive, e.g. the return value from a `size()` function.
+That is because all possible positive signed values can be converted to the corresponding value of an equally sized unsigned value.
+At the bit level it's not even a conversion, the bit representation is exactly the same.
+This means that if we use signed integers for our sizes and indices then the users can freely choose if they want to use signed or unsigned indices.
+The opposite is not save, which is the whole reason for this note to exist.
+
+(
+End of draft text.
+)
 ## Mostly Safe Conversions To Unsigned
 
 It is usually safe to pass a signed integer value in a call to a function taking an unsigned integer parameter.
@@ -597,6 +636,53 @@ Also, underflow with signed integer types is undefined behavior.
 
 The result is that using a signed integer type is similar to setting `VERY_LARGE_NUMBER` to the halfway-point between 0 and the maximum representable value.
 So when using unsigned integers for indices we have the flexibility to set `VERY_LARGE_NUMBER` larger than that and thereby support larger containers.
+
+But it gets worse.
+In some cases we can end up in a case where a small signed negative becomes a large but not very large unsigned value.
+It takes a few steps:
+```cpp
+void work_3(
+    Container& container,
+    std::size_t index)
+{
+    if (index > VERY_LARGE_NUMBER)
+    {
+	    reprt_error("Possible underflow detected in work.");
+	    return;
+    }
+
+	// Work with container[index].
+}
+
+void work_2(
+    Container& container,
+    unsigned int index // Unsigned type smaller than std::size_t.
+)
+{
+	// This function represents some kind of preparation work.
+	// It results in a call the the above function with the
+	// index parameter passed through unchanged.
+    work_3(container, index);
+}
+
+void work_1(
+    Container& container,
+    int index
+)
+{
+    // This function represents some kind of preparation work.
+	// It results in a call the the above function with the
+	// index parameter passed through unchanged.
+    work_2(container, static_cast<unsigned int>(index));
+}
+```
+
+If `work_1` is called with a negative index then it is converted to a somewhat large unsigned value when passed to `work_2`.
+It is then expanded to a `size_t` and passed to `work_3`.
+Since the expansion happens from an unsigned type sign extension will not be performed and we get a somewhat large number in `work_3`, not a very large number as we would have if we had called `work_3` directly from `work_1`.
+The result is that we get something that looks like a valid index and if the container is large enough then we will perform work on the wrong element.
+This can result in a hard to track down bug since it only manifests with large data sets,
+something that in many projects isn't as broadly tested in unit tests and only happens in production.
 
 A signed integer underflow is just as difficult to test for as an unsigned one.
 The difference is that the edge where the underflow happens is much farther away from common values for signed integers than it is for unsigned integers.
