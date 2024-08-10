@@ -1,6 +1,6 @@
 A signed integer type is one that can represent both positive and negative numbers, and zero.
-An unsigned integer is one that can only represent positive numbers, and zero.
-The purpose for this note is to explore the pros and cons of using each in cases where it is not obvious, such as for indexing.
+An unsigned integer is one that can only represent positive numbers, including zero.
+The purpose for this note is to explore the pros and cons of using each in cases where it is not obvious, such as for sizes and indexing.
 There is no universally agreed upon choice.
 The options are permutations of:
 - Integer signedness.
@@ -16,13 +16,17 @@ We can have different priorities when making this decision, and put different we
 - Runtime performance: The code should execute as fast as possible.
 - Memory usage: Always use the smallest type possible.
 - Avoid undefined behavior.
-- Undefined behavior one error: It is diagnosable with an undefined behavior sanitizer.
+- Undefined behavior on error: It is diagnosable with an undefined behavior sanitizer.
+	- Though being undefined behavior means the compiler may do unexpected transformations to our code, meaning that the overflow might not actually happen at runtime. Instead the application does something completely different.
 
 (
 TODO For each advantage / disadvantage describe how it affects the priorities listed above.
 )
 
 In this note `integer_t` is an integer type that is an alias for either `std::size_t` or `std::ptrdiff_t` depending on if we use signed or unsigned indexing.
+(
+Is there any difference between `intptr_t` and `std::ptrdiff_t`?
+)
 In this note `unsigned_integer_t` is an alias for `std::size_t`.
 In this note `signed_integer_t` is an alias for `std::ptrdiff_t`.
 In this note `Container` represents any container type that has `std::size_t size() const` and `T& operator[](size_t)` member function, for example `std::vector`.
@@ -82,6 +86,8 @@ Often `int` [(13)](https://www.sandordargo.com/blog/2023/10/18/signed-unsigned-c
 This is not terribly bad as long as the container isn't very large.
 The counter will only ever be positive and a positive `int` can always be implicitly converted to `std::size_t` without loss.
 This will work as expected until the container holds more elements than the largest possible `int`.
+At that point an undefined behavior sanitizer will report the overflow,
+but it is unlikely that data sets of that size are included in unit tests run with sanitizers.
 
 ```cpp
 void work(Container& container)
@@ -93,6 +99,19 @@ void work(Container& container)
 }
 ```
 
+Here is a variant that will loop forever if the container size is larger than the largest `unsigned int`,
+visiting each element again and again a indefinite number of times.
+A sanitizer typically don't report this because the this behavior might be intended.
+
+```cpp
+void work(Container& container)
+{
+	for (unsigned int index = 0; index < container.size(); ++index)
+	{
+		// Work with container[index].
+	}
+}
+```
 ## Implicit Conversion From Signed To Unsigned
 
 The compiler will implicitly convert signed values to unsigned when a signed and an unsigned operands of the same size are passed to an operator.
@@ -228,21 +247,41 @@ Using unsigned is a natural choice when working with non-negative quantities suc
 ## Makes Invalid Values Unrepresentable
 
 Restricting what values can be passed to a function through the type system is a good way to communicate how the function is meant to be used to both programmers and the compiler.
-At least it would be if we didn't have implicit signed → unsigned conversions.
+It simplifies the written documentation required.
+
+At least it would be good if we didn't have implicit signed → unsigned conversions.
 And if arithmetic over- and underflow was an error instead of wrapping.
+Passing a negative signed value into a function taking an unsigned parameter is a common source of bugs [(15)](https://youtu.be/Puio5dly9N8?t=2561),
+making the parameter an unsigned integer type doesn't protect us from that unfortunately.
+
+## Integrates Well With The Standard Library Containers
+
+Since the standard library containers use `std::size_t`, it is not unreasonable that our code using then also should.
+By making our own container classes similar to the standard library containers we make them familiar to other C++ programmers [(18)](https://softwareengineering.stackexchange.com/questions/338088/size-t-or-int-for-dimensions-index-etc).
+
+
+## The Type Returned By `sizeof()`
+
+By definition, `std::size_t` is a type large enough to hold the size of any object.
+Therefore it is the type returned by `sizeof()`.
+Therefore, any time you wish to work with the size of objects in bytes, you should use `std::size_t` [(18)](https://softwareengineering.stackexchange.com/questions/338088/size-t-or-int-for-dimensions-index-etc).
+For consistency, we should also use `std::size_t` for other sizes, such as the number of elements in a container.
+
 
 ## Larger Positive Range
 
 An unsigned integer can address twice as many container elements as an equally-sized signed integer can.
 If you don't need a sign then don't spend a bit on it.
 When no negative numbers are required, unsigned integers are well-suited for networking and systems with little memory, because unsigned integers can store more positive numbers without taking up extra memory.
-You get double the range of positive values compared to an equally sized signed type.
-This may be important when the index type is small [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), such as 16 or possibly even 32-bit in some cases.
+This may be important when the index type is small [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [(18)](https://softwareengineering.stackexchange.com/questions/338088/size-t-or-int-for-dimensions-index-etc), such as 16 or possibly even 32-bit in some cases.
 I'm not sure when this will become a restriction for 64-bit signed indices, the largest `std::ptrdiff_t` value is 9'223'372'036'854'775'807.
+For most modern applications on modern hardware the extra bit is not necessary [(15)](https://youtu.be/Puio5dly9N8?t=2561), does not come up in practice very much.
+The limitation only comes into effect when the container contains single-byte elements such as char,
+with any larger type with run out of addressable memory for the data before we run out of index values in a signed integer.
 
 If we chose a signed integer instead then we need to motivate the loss of maximum size.
 
-However, having the extra bit does not mean it is actually used.
+However, having the extra bit does not mean it is actually used [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
 At least [GCC's standard library implementation of `vector` is limited](https://github.com/gcc-mirror/gcc/blob/releases/gcc-11.4.0/libstdc%2B%2B-v3/include/bits/stl_vector.h#L1776) to the range of `std::ptrdiff_t`, and the same is stated under _Note_ on [cppreference.com/vector/max_size](https://en.cppreference.com/w/cpp/container/vector/max_size).
 
 ## Single-Comparison Range Checks
@@ -263,6 +302,25 @@ See _Disadvantages Of Unsigned_ > _Impossible To Detect Underflow_ for a longer 
 This may come with a performance improvement dues to the smaller number of instructions,
 but that is unlikely on a modern computer in most cases since the number of loads is the same and ALU saturation is rarely the limiting factor for execution speed [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf).
 
+## Under- And Overflow Is Not Undefined Behavior
+
+It's not too bad to have under- or overflow in our loop iterations because at least it isn't undefined behavior  [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
+
+A counter-point is that even if the computation of the bad index isn't undefined behavior,
+using it may be, depending on what it is being used for.
+Indexing into an array or `std::vector` would be undefined behavior.
+
+Another counter-point is that by making under- and overflow undefined behavior we allow tools, such as undefined behavior sanitizers to find them.
+
+## Bit With Conversions Cheaper
+
+If you mix values with different bit width then unsigned is more efficient because the conversion is a no-op.
+With signed values one must perform sign extension when going from e.g. 32-bit to 64-bit [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post19).
+
+On the other hand, with signed values the compiler may not need to do any conversion at all.
+In some cases it can transform the code to use the target type form the start [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post23).
+See _Advantages Of Signed_ > _More Opportunities For Compiler Optimizations_.
+
 ## Most Values Are Positive And Positive Values Rarely Mix With Negative Values
 
 I'm not sure this is true.
@@ -278,6 +336,10 @@ Signed integer behaves as most people expect number to behave most of the time.
 but it is not true for the most common unsigned number: 0.
 
 Using the type that is more similar to our intuition of how numbers work makes it faster to teach new programmers, and even intermediate programmers will make fewer mistakes (citation needed).
+
+Small negative numbers are more common than very large positive numbers.
+
+Mixing signed and unsigned numbers adds even more surprising behavior.
 
 ## Can Detect Unintended Negative Values
 
@@ -339,10 +401,9 @@ unsigned short process_meshlets(
 
 ## The Underflow Is Farther Away From Common Numbers
 
-With a signed integers we have a larger margin from commonly used values to the underflow edge.
+With signed integers we have a larger margin from commonly used values to the underflow edge.
 Small mistakes are unlikely to cause and underflow.
-
-
+For unsigned types, that boundary point at the busiest spot, zero  [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
 
 ## Backwards Loops Easier To Write
 
@@ -370,16 +431,106 @@ void work(const Container& container)
 }
 ```
 
+The stop-at-error condition doesn't need to be as obvious.
+The following code has the same problem [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing), but only for some values of `end`.
+```cpp
+std::size_t find(
+	Container<T>& container, std::size_t start, std::size_t end, T value)
+{
+	for (std::size_t index = start; index >= end; ++index)
+	{
+		if (container[index] == value)
+		{
+			return index;
+		}
+	}
+}
+```
+
+When `end` is 0 we get the same `index >= 0` tautology, and an infinite loop again.
+Note that the `end` index is inclusive, which is not how it is usually done in C++.
+We may try to make end non-inclusive instead.
+That changes the loop condition to `index > end` and the loop is no longer infinite for `end = 0`.
+However, consider what happens if the caller wants to search the entire range, i.e. all the way to and inclusive the first element.
+In that case `end` must be one-less than the first element, i.e. one-less than 0.
+So we pass, perhaps unknowingly because the calling function is also operating on a parameter, `0 - 1`, which is `-1`, which is 18446744073709551614.
+There is no `std::size_t` value larger than that so the `index > end` will never be true,
+the loop will not run a single iteration.
+Must do the `std::size_t index = i - 1` rewrite again to make it work as intended.
+
+### Walking Image Rows Backwards
+
+Another use-case [(22)](https://stackoverflow.com/questions/16966636/signed-unsigned-integer-multiplication) for a reverse loop is to walk over the rows of a matrix or an image.
+In addition to counting backwards, this code also mixes both signedness and bit widths (here we assume that `std::size_t` is larger than `std::int32_t`) to break things.
+In the following `image` contains pixel data representing a `width` x `height` large image in row-major order.
+```cpp
+void work(
+	Pixel* const pixels,
+	integer_t const num_rows,
+	integer_t const num_columns,
+	std::int32_t const stride)
+{
+	for (std::uint32_t i = 0; i < num_rows; ++i)
+	{
+		Pixel* row = pixels + i * stride;
+		// Work with row[0] to row[num_columns - 1].
+	}
+}
+
+void work_backwards(Image& image)
+{
+	Pixel* last_row = image.pixels + (image.height - 1) * image.width;
+	work(last_row, image.height, -image.width);
+}
+```
+
+With signed integers there is not problem here.
+With unsigned integers we have a problem with the `i * stride` part when `stride` is negative.
+When `stride` is implicitly converted to unsigned we end up with a very large number.
+We therefore jump very far away from `pixels` when computing `row`.
+For reasons not completely clear to me it works out the way we intend when the indexing calculation is done at the same bit width as the pointer calculation [(23)](https://stackoverflow.com/a/35253263).
+My reasoning is that multiplication is simply repeated addition and since addition with a negative number wrapped to a very large number causes a shift upwards by almost the entire range, a wrap around at the top, and then all the way back up towards the number we started at, stopping just where we should to make it appear we actually did add a negative number, so when we multiply with a negative number we can imagine that the same thing happens multiple times.
+The illusion breaks, however, when the bit widths of the pointer and the computed offset doesn't match.
+The computation of `i * stride` produces a very large number that would be almost a full trip around the value range on a 32-bit machine, bringing us to the next pixel row in the backwards iteration, but on a 64-bit machine that very large 32-bit number isn't all that large compared to 64-bit addresses and when we add a not all that large number to the `Pixel` pointer we get a garbage pointer.
+
+## Can Have Negative Intermediate Values
+
+(TODO Find a good example of this.)
+
+In some cases the index computation may produce intermediate negative values.
+This is OK as long as we ultimately end up with a positive value being passed to `operator[]`.
+This works with unsigned integers as long as the computation only involves operations that work as intended under modular arithmetic, additions and subtractions.
+(Does multiplication work as well?)
+The modular arithmetic ensures that the correct number of steps is taken in both directions regardless of any wrapping at either side.
+It may make debugging more difficult since printing values won't show the "semantically correct" value but instead the wrapped value.
+However, if we do divides on a supposedly negative, but actually very large, values then we will get an incorrect result.
+
+```cpp
+void work(
+	Container& container,
+	std::size_t base,
+	std::size_t bonus,
+	std::size_t penalty,
+	std::size_t attenuation)
+{
+	std::size_t index = base + (bonus - penaly) / attenuation;
+	// Work with container[index].
+}
+```
+
 ## Tools Can Report Underflow And Overflow
 
 Tools, such as sanitizers, can report underflow and underflow on signed arithmetic operations.
 In most cases the user did not intend for the operation to under- or overflow.
 Tools cannot do this for unsigned operations in general since the behavior is defined in those cases, it is not an error.
 
+I imagine we can have tools that can be configured to report unsigned wrapping if we want to,
+but since there are cases where we actually want wrapping this is not something that can be done in general.
+We may want the check in some parts of the code but not others.
 
 ## Less Mixing Of Signed And Unsigned
 
-One source of bugs is when signed and unsigned values are mixed in an expression [(7)](https://google.github.io/styleguide/cppguide.html#Integer_Types), [(12)](https://www.sandordargo.com/blog/2023/10/11/cpp20-intcmp-utilities).
+One source of bugs is when signed and unsigned values are mixed in an expression [(7)](https://google.github.io/styleguide/cppguide.html#Integer_Types), [(12)](https://www.sandordargo.com/blog/2023/10/11/cpp20-intcmp-utilities), [(15)](https://youtu.be/Puio5dly9N8?t=2561).
 This leads to implicit conversions and results that are difficult to predict for many programmers.
 Assuming we are required to use signed values for some variables, some data is inherently signed [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), it follows that we want to also use a singed type for any value that is used together with the inherently signed data.
 This process repeats and a front of the signed-ness spreads like a virus across the code base until everything, or at least most things, are signed.
@@ -441,7 +592,7 @@ They want to following code, where `container[index]` contains an implicit signe
 ```cpp
 void work(Container& container)
 {
-	for (integer_t index = 0; index < container.size(); ++index)
+	for (ptrdiff_t index = 0; index < container.size(); ++index)
 	{
 		// Work with container[index].
 	}
@@ -478,6 +629,27 @@ The opposite is not save, which is the whole reason for this note to exist.
 (
 End of draft text.
 )
+
+Since unsigned values are often implicitly converted to unsigned values when the two are mixed we can get surprising results like this [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU):
+```cpp
+signed int a {-1};
+unsigned int b{1};
+a < b // Evaluates to false because a is converted
+      // to unsigned and wraps in the process.
+```
+
+Martin Beeger summarizes the mixing issue well  [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post15)
+
+> ... the unsigned-signed promotion and comparison rules are just a as
+> big hazard. We should never be forced to really think about them.
+> This is possible through consistent use of one type of indexes, sizes,
+> slices etc. And negative slices and strides have well-defined meaning
+> and should be allowed, so they must be signed. Deciding on a
+> case-by-case basis forces peoples into all the nitty gritty details of
+> integer promotion and comparision, which is exactly what we should IMHO
+> protect users from.
+
+
 ## Mostly Safe Conversions To Unsigned
 
 It is usually safe to pass a signed integer value in a call to a function taking an unsigned integer parameter.
@@ -489,10 +661,10 @@ This is fine even with a negative offset:
 ```cpp
 bool work(
 	Container& container,
-	signed int base, signed int offset, signed int stride
+	std::ptrdiff_t base, std::ptrdiff_t offset, std::ptrdiff_t stride
 )
 {
-	signed int index = base + offset * stride;
+	std::ptrdiff_t index = base + offset * stride;
 	if (!isValidIndex(container, index))
 	{
 		report_error(
@@ -511,11 +683,11 @@ Note that only `offset` is signed since that is the only value that can be negat
 ```cpp
 bool work(
 	Container& container,
-	unsigned int base, signed int offset, unsigned int stride
+	std::size_t base, std::ptrdiff_t offset, std::size_t stride
 )
 {
 	// Here be footguns.
-	unsigned int index = base + offset * stride;
+	std::size_t index = base + offset * stride;
 	if (!isValidIndex(container, index))
 	{
 		report_error(
@@ -543,8 +715,41 @@ but in this case an undefined behavior sanitizer will report the error as soon a
 
 ## More Opportunities For Compiler Optimizations
 
-Since signed integer under- and overflow is undefined behavior the compiler can optimized 
-based on this knowledge.
+Since signed integer under- and overflow is undefined behavior the compiler can optimize based on this knowledge.
+For example it can assume that `index + 1` is greater than `index` and that `container[index]` is next to both `container[index - 1]` and `container[index + 1]`.
+This is not true for unsigned types since both `- 1` and `+ 1` can cause the value to wrap around.
+This can make auto-vectorization more difficult [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
+
+With signed integers the compiler can simplify `10 * k / 2` to `5 * k`,
+this is not possible with unsigned since the `10 * k` part can wrap.
+
+Loops with fixed but unknown number of iterations can be optimized better with signed integers [(16)](https://www.youtube.com/watch?v=g7entxbQOCc).
+
+The compiler can chose to use a larger sized signed integer type if it believes it will make the loop faster since it knows that the smaller sized integer won't overflow and the larger sized integer can hold all values that the smaller can hold [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post23), [(17)](https://youtu.be/yG1OZ69H_-o?t=2357).
+This is not possible with unsigned integer because wrapping is defined.
+```cpp
+// What the programmer wrote:
+void work(Container& container, std::ptrdiff_t end)
+{
+	for (int index = 0; index < end; ++index)
+	{
+		// Work on container[index].
+	}
+}
+
+// What the compiler does.
+// Index became std::ptrdiff_t.
+void work(Container& container, std::ptrdiff_t end)
+{
+	for (std::ptrdiff_t index = 0; index < end; ++index)
+	{
+		// Work on container[index].
+	}
+}
+```
+
+Though there are some cases where unsigned provides better optimization opportunities.
+For example division [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
 
 
 
@@ -581,7 +786,7 @@ This makes reverse loops non-trivial to write, the following classical example d
 ```cpp
 void work(const Container& container)
 {
-	for (unsigned int index = container.size() - 1; index >= 0; ++index)
+	for (std::size_t index = container.size() - 1; index >= 0; ++index)
 	{
 		// Work with container[index];
 	}
@@ -592,9 +797,9 @@ This is better:
 ```cpp
 void work(const Container& container)
 {
-	for (unsigned int i = container.size(); index > 0; ++i)
+	for (std::size_t i = container.size(); index > 0; ++i)
 	{
-		const unsigned index = i - 1;
+		const std::size_t index = i - 1;
 		// Work with container[index];
 	}
 }
@@ -602,6 +807,17 @@ void work(const Container& container)
 
 Another option is something based on [`std::reverse_iterator`](https://en.cppreference.com/w/cpp/iterator/reverse_iterator) or [`std::ranges::reverse_view`](https://en.cppreference.com/w/cpp/ranges/reverse_view).
 
+Another operation made more difficult with unsigned integers is stopping some number of elements before the end.
+```cpp
+void work(Container& container)
+{
+	for (std::size_t index; index < container.size() - 1; ++index)
+	{
+		// Work with container[index].
+	}
+}
+```
+The above does not work when the container is empty  since `container.size()`
 ## Impossible To Detect Underflow
 
 It is impossible to detect earlier arithmetic underflow, other than with heuristics.
@@ -609,7 +825,7 @@ By the time we get to the `work` function the damage has already been done.
 In the code below the programmer decided that the container passed to `work` should never contain more than `VERY_LARGE_NUMBER`, some constant defined somewhere, and any index argument larger than that is a sign that we had an underflow in the computation of that argument.
 
 ```cpp
-void work(const Container& container, integer_t index)
+void work(const Container& container, std::size_t index)
 {
 	if (index > VERY_LARGE_NUMBER)
 	{
@@ -661,7 +877,10 @@ void work_2(
 {
 	// This function represents some kind of preparation work.
 	// It results in a call the the above function with the
-	// index parameter passed through unchanged.
+	// index parameter passed through unchanged by the code
+	// but implicitly converted to size_t. Since both the source
+	// and destination types are unsigned no sign bit extension
+	// will be performed.
     work_3(container, index);
 }
 
@@ -672,8 +891,11 @@ void work_1(
 {
     // This function represents some kind of preparation work.
 	// It results in a call the the above function with the
-	// index parameter passed through unchanged.
-    work_2(container, static_cast<unsigned int>(index));
+	// index parameter passed through unchanged by the code,
+	// but implicitly converted to unsigned int. Since the
+	// source and destination types are the same size the bits
+	// will be passed through unchanged.
+    work_2(container, index);
 }
 ```
 
@@ -687,6 +909,16 @@ something that in many projects isn't as broadly tested in unit tests and only h
 A signed integer underflow is just as difficult to test for as an unsigned one.
 The difference is that the edge where the underflow happens is much farther away from common values for signed integers than it is for unsigned integers.
 For unsigned integers the edge is at 0, for signed integers it is at some large negative number.
+
+## Under- And Overflow Is Not An Error
+
+And thus not reported by error detection tools such as undefined behavior sanitizers.
+
+```cpp
+std::size_t x = /* Expression. */;
+std::size_t y = /* Expression. */;
+container[x - y];
+```
 
 ## Implicit Conversion Of Signed Values Leads To Bugs
 
@@ -787,13 +1019,35 @@ for example [_Learn C++_ > _16.7 — Arrays, loops, and sign challenge solutions
 
 ## Require Two Comparisons For Range Checks
 
+Since unsigned integers cannot be negative there is no need to test whether a given index is less than zero.
+So it is enough to test the index against one end of the range,
+since the other end is built into the type.
+
+With a signed type, since it can contain negative values, we must also check the lower end of the range, i.e. 0.
+
 ```cpp
 // Signed index.
 if (index < 0 || index >= container.size())
+	return false;
 
 // Unsigned index.
 if (index >= container.size())
+	return false;
 ```
+
+A suggestion [(21)](https://internals.rust-lang.org/t/subscripts-and-sizes-should-be-signed/17699) to test signed integers with a  single comparison is to cast it to unsigned.
+
+```cpp
+if (static_cast<std::size_t>(index) >= container.size())
+	return false;
+```
+
+This will wrap moderately sized negative values to very large positive values,
+probably larger than the container size.
+This only works if the index isn't more negative than the size of the container.
+This means that if we want to be guaranteed that this trick works then we may never create a container larger than half the range of the unsigned type.
+Which is true for e.g. `std::vector`.
+
 
 Another option is to wrap the index in a type that expresses the restriction while still retaining signed arithmetic.
 The type can provide useful helper functions.
@@ -861,9 +1115,28 @@ Use `n % 2 != 0` instead.
 # Alternatives To Indexing
 
 - Range based for loops.
+	- Less flexible than index-based loops.
 - The ranges library.
 - Named algorithms.
 - Iterators.
+
+# Signed Overloads In The Standard Library
+
+A suggestion is to add
+- `std::ptrdiff_t ssizeof`
+- `std::ptrdiff_t std::vector<T>::ssize()`
+- `T& std::vector<T>::operator[](ptrdiff_t)`
+
+A similar change is [advised against](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post3) for Eigen by Benoit:
+
+>The only thing that would be really bad would be to try to make both
+>signednesses fully supported. That would mean keeping only the intersection
+>of the sets of advantages of either signedness, having to deal with the
+>union of the sets of constraints.
+
+I'm not sure that the "intersection of advantages" and "union of constraints" are.
+I should make a list here.
+
 # References
 
 - 1:  [_Should I use unsigned types? Or should I turn off Wconversion?_ @ reddit.com/cpp 2024](https://www.reddit.com/r/cpp_questions/comments/1ehc50j/should_i_use_unsigned_types_or_should_i_turn_off/)
@@ -880,3 +1153,15 @@ Use `n % 2 != 0` instead.
 - 12: [_How to compare signed and unsigned integers in C++20?_ by Sandor Dargo @ sandordargo.com](https://www.sandordargo.com/blog/2023/10/11/cpp20-intcmp-utilities)
 - 13: [_My battle against signed/unsigned comparison: the most usual violations_ by Sandor Dargo @ sandordargo.com 2023](https://www.sandordargo.com/blog/2023/10/18/signed-unsigned-comparison-the-most-usual-violations)
 - 13: [P1428R0 _Subscripts and sizes should be signed_ by Bjarne Stroustrup @ open-std.org 2018](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf)
+- 14: [_eigen Signed or unsigned indexing_ @ eigen.tuxfamily.narkive.com 2017](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing)
+- 15: [_Interactive Panel: Ask Us Anything_ 42:41 Q: Elaborate on not using unsigned int unless you want to do bit arithmetic. Answer by Bjarne Stroustrup, Herb Sutter, Chander Charruth @ youtube.com](https://youtu.be/Puio5dly9N8?t=2561)
+- 16: [_CppCon 2016: Michael Spencer “My Little Optimizer: Undefined Behavior is Magic"_ by Michael Spencer, CppCon @ youtube.com 2016](https://www.youtube.com/watch?v=g7entxbQOCc)
+- 17: [_CppCon 2016: Chandler Carruth “Garbage In, Garbage Out: Arguing about Undefined Behavior..."_ by Chandler Carruth, CppCon @ youtube.com 2016](https://youtu.be/yG1OZ69H_-o?t=2357)
+- 18: [_size_t or int for dimensions, index, etc_ @ stackexchange.com 2016](https://softwareengineering.stackexchange.com/questions/338088/size-t-or-int-for-dimensions-index-etc)
+- 19: [_CppCon 2016: Jon Kalb “unsigned: A Guideline for Better Code"_ by Jon Kalb, CppCon @ youtube.com](https://www.youtube.com/watch?v=wvtFGa6XJDU)
+- 20: [_Iteration Over std::vector: Unsigned vs Signed Index Variable_ by @ geeksforgeeks.org 2024](https://www.geeksforgeeks.org/iteration-over-vector-unsigned-vs-signed-index-variable-cpp/)
+- 21: [_Subscripts and sizes should be signed_ by T4r4sB et.al. @ rust-lang.org 2022](https://internals.rust-lang.org/t/subscripts-and-sizes-should-be-signed/17699)
+- 22: [_Signed & unsigned integer multiplication_ by phkahler et.al. @ stackoverflow.com 2013](https://stackoverflow.com/questions/16966636/signed-unsigned-integer-multiplication)
+- 23: [_Signed to unsigned conversion in C - is it always safe?_ by cwick et.al @ stackoverflow.com 2008](https://stackoverflow.com/questions/50605/signed-to-unsigned-conversion-in-c-is-it-always-safe)
+- 24: [_Is it a good practice to use unsigned values ?_ by \[deleted\] et.al @ reddit.com/cpp 2018](https://www.reddit.com/r/cpp/comments/7y0o6r/is_it_a_good_practice_to_use_unsigned_values/)
+
