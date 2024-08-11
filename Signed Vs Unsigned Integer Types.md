@@ -1,3 +1,10 @@
+(
+TODO
+Rewrite the sectioning to not be pros/cons signed/unsigned since there is too much repetition.
+Instead describe one use-case / concept at the time and evaluate the consequences with signed and unsigned integers together.
+This makes it easier to place considerations that doesn't fit neatly into a pro or con for either of them, such as the `auto mid = (low + high) / 2`  discussion in [25](https://graphitemaster.github.io/aau#computing-indices-with-signed-arithmetic-is-safer), and others in the same text.
+)
+
 A signed integer type is one that can represent both positive and negative numbers, and zero.
 An unsigned integer is one that can only represent positive numbers, including zero.
 The purpose for this note is to explore the pros and cons of using each in cases where it is not obvious, such as for sizes and indexing.
@@ -242,7 +249,8 @@ Another recommendation is to always use signed even in this case.
 
 ## The Natural Type To Use
 
-Using unsigned is a natural choice when working with non-negative quantities such as indices and counts [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf).
+Using unsigned is a natural choice when working with non-negative quantities such as indices and counts [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [25](https://graphitemaster.github.io/aau/).
+
 
 ## Makes Invalid Values Unrepresentable
 
@@ -323,6 +331,8 @@ See _Advantages Of Signed_ > _More Opportunities For Compiler Optimizations_.
 
 ## Most Values Are Positive And Positive Values Rarely Mix With Negative Values
 
+[25](https://graphitemaster.github.io/aau/)
+
 I'm not sure this is true.
 [Link](https://www.reddit.com/r/cpp_questions/comments/1ej5mo0/comment/lgcbrh0/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button).
 
@@ -401,27 +411,41 @@ unsigned short process_meshlets(
 
 ## The Underflow Is Farther Away From Common Numbers
 
-With signed integers we have a larger margin from commonly used values to the underflow edge.
+With signed integers we have a larger margin from commonly used values to the underflow edge [25](https://graphitemaster.github.io/aau/).
 Small mistakes are unlikely to cause and underflow.
 For unsigned types, that boundary point at the busiest spot, zero  [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
 
 ## Backwards Loops Easier To Write
 
-The following intuitive loop only works with signed integers since the `index >= 0` condition only makes sense for signed integer..
+The following intuitive loop only works with signed integers since the `index >= 0` condition only makes sense for signed integer.
 
 ```cpp
 void work(const Container& container)
 {
-	for (integer_t index = container.size() - 1; index >= 0; index--)
+	for (integer_t index = container.size() - 1; index >= 0; --index)
 	{
-		// Work on container[index];
+		// Work on container[index].
 	}
 }
 ```
 
-The following strided loop that handles the condition problem above fails half of the time, when `i` goes from `1` to `18446744073709551615`, with unsigned integers, while with signed integers the loops works just fine.
+One way to make it work also for unsigned integers is to offset by one, making loop counter 1 the last iteration.
 ```cpp
-void work(const Container& container)
+void work(Container& container)
+{
+	for (integer_t i = container.size() ; i > 0; --i)
+	{
+		integer_t const index = i - 1;
+		// Work with container[index].
+	}
+}
+```
+
+This works when the stride is one, which means that we are sure that we will hit 0 when the loop should end.
+
+The following strided loop fails half of the time with unsigned integers, when `i` goes from `1` to `18446744073709551615`, while with signed integers the loops works just fine.
+```cpp
+void work(Container& container)
 {
 	for (integer_t i = container.size(); i > 0; i -= 2)
 	{
@@ -431,6 +455,22 @@ void work(const Container& container)
 }
 ```
 
+Another way to write the loop, which works only for unsigned integers, is to check for the wrapping instead of the stop condition [25](https://graphitemaster.github.io/aau/).
+Check the upper end of the range instead of the lower end, since on wrapping, i.e. when we should stop, the index will go very large.
+
+```cpp
+void work(Container& container)
+{
+	for (std::size_t index = container.size() - 1; i < size; --i)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+This works, but if we make a habit of writing our loops like this then we must beware that if we every have a singed loop counter then we must switch to another construct.
+
+Back to the check-for-reached-container-start variant again.
 The stop-at-error condition doesn't need to be as obvious.
 The following code has the same problem [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing), but only for some values of `end`.
 ```cpp
@@ -457,6 +497,22 @@ So we pass, perhaps unknowingly because the calling function is also operating o
 There is no `std::size_t` value larger than that so the `index > end` will never be true,
 the loop will not run a single iteration.
 Must do the `std::size_t index = i - 1` rewrite again to make it work as intended.
+
+Another variant is to separate the loop counter from the index.
+We let the loop counter count as we normally, i.e. from zero and up, and compute the index.
+Now `i` counts how many elements we have already processed.
+On the first iteration we have processed 0 elements so should move 0 indices down from the last element.
+The last element is at `container.size() - 1`.
+```cpp
+void work(Container& container)
+{
+	for (integer_t i = 0; i < container.size(); ++i)
+	{
+		integer_t index = container.size() - 1 - i;
+		// Work with container[index].
+	}
+}
+```
 
 ### Walking Image Rows Backwards
 
@@ -517,6 +573,14 @@ void work(
 	// Work with container[index].
 }
 ```
+
+However, since most subtraction is incorrect anyway [25](https://graphitemaster.github.io/aau/) , this doesn't matter.
+Instead of computing the signed delta, use the absolute value of the delta:
+```
+integer_t delta = max(x, y) - min(x, y);
+```
+It won't be the value you wanted, but at least it will be legal and under-/overflow free.
+(I understand Dale Weiler doesn't mean it like that, but the whole discussion is weird to me.)
 
 ## Tools Can Report Underflow And Overflow
 
@@ -769,6 +833,29 @@ The relevant factual takeaways from the C++ Core Guidelines has been incorporate
 See
 - [_C++ Core Guidelines_ > _Arithmetic_](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#arithmetic)
 - [_Google C++ Style Guide_ > _Integers_](https://google.github.io/styleguide/cppguide.html#Integer_Types)
+
+
+## Can Use Negative Values As Error Codes
+
+E.g.
+```cpp
+void work(Container& container, T key)
+{
+	std::ptrdiff_t index = find(container, key);
+	if (index < 0)
+	{
+		// switch block with a bunch of negateive cases.
+		return;
+	}
+
+	// Work on container[index].
+}
+```
+
+I don't like this much.
+It overloads the semantics of the return value of `find`.
+Better to keep the error reporting separate.
+Either with an output parameter, returning a tuple or a struct, returning an optional (when we don't need multiple error values), or `std::expected`.
 
 # Disadvantages Of Unsigned
 
@@ -1089,10 +1176,12 @@ struct Positive
 
 This means that we must do all checks before any arithmetic operation.
 We cannot detect errors by checking the result.
+Many constructs that looks correct in fact aren't.
 The following cannot be used to detect overflow:
 ```cpp
 bool work(Container& container, signed int base, signed int offset)
 {
+	// Aassume offset is positive.
 	signed int index = base + offset;
 	if (index < base)
 	{
@@ -1104,7 +1193,15 @@ bool work(Container& container, signed int base, signed int offset)
 }
 ```
 
+Do the following to detect if an under- or overflow is about the happen,
+which is non-trivial to memorize or derive when needed [25](https://graphitemaster.github.io/aau/).
+```cpp
+// Check for addition overflow, i.e a + b.
+if ((b > 0 && a > INT_MAX - b) || (b < 0 && a < INT_MIN - b)) 
 
+// Check for subtraction overflow, i.e a - b.
+if ((b > 0 && a < INT_MIN + b) || (b < 0 && a > INT_MAX + b))
+```
 
 ## The Modulus Operator Behavior Can Be Unexpected For Negative Numbers
 
@@ -1119,6 +1216,17 @@ Use `n % 2 != 0` instead.
 - The ranges library.
 - Named algorithms.
 - Iterators.
+
+Rust has a range based loop construct that has built-in support for backwards looping [25](https://graphitemaster.github.io/aau/).
+```rust
+fn work(Container container)
+{
+	for index in (0..container.size()).rev()
+	{
+		// Woth with container[index].]
+	}
+}
+```
 
 # Signed Overloads In The Standard Library
 
@@ -1164,4 +1272,6 @@ I should make a list here.
 - 22: [_Signed & unsigned integer multiplication_ by phkahler et.al. @ stackoverflow.com 2013](https://stackoverflow.com/questions/16966636/signed-unsigned-integer-multiplication)
 - 23: [_Signed to unsigned conversion in C - is it always safe?_ by cwick et.al @ stackoverflow.com 2008](https://stackoverflow.com/questions/50605/signed-to-unsigned-conversion-in-c-is-it-always-safe)
 - 24: [_Is it a good practice to use unsigned values ?_ by \[deleted\] et.al @ reddit.com/cpp 2018](https://www.reddit.com/r/cpp/comments/7y0o6r/is_it_a_good_practice_to_use_unsigned_values/)
-
+- 25: [_Almost Always Unsiged_ by Dale Weiler @ graphitemaster.github.io 2022](https://graphitemaster.github.io/aau/)
+- 26: [_Amost Always Unsigned_ @ reddit.com/cpp 2022](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned/)
+- 
