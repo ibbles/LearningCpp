@@ -5,6 +5,64 @@ Instead describe one use-case / concept at the time and evaluate the consequence
 This makes it easier to place considerations that doesn't fit neatly into a pro or con for either of them, such as the `auto mid = (low + high) / 2`  discussion in [25](https://graphitemaster.github.io/aau#computing-indices-with-signed-arithmetic-is-safer), and others in the same text.
 )
 
+
+(
+TODO 
+Find where to put the following loop, demonstrating division in the index calculation.
+```cpp
+void work(
+	Container& container,
+	integer_t base_index,
+	Container<std::ptrdiff_t>& byte_offsets,
+	integer_t element_size)
+{
+	for (integer_t byte_offset : byte_offsets)
+	{
+		integer_t index = base_index + (byte_offset / element_size);
+		// Work with container[index].
+	}
+}
+```
+)
+
+(
+TODO
+Find where to put the following loop, demonstrating iterating over a sub-range [(28)](https://gustedt.wordpress.com/2013/07/15/a-praise-of-size_t-and-other-unsigned-types/).
+```cpp
+void work(Container& container, std::ptrdiff_t start_skip, std::ptrdiff_t end_skip)
+{
+	for (integer_t index = start; index < container.size() - end_skip; ++index)
+	{
+		// Work with contianer[index].
+	} 
+}
+```
+
+The above fails for unsigned index when `end_skip > container.size()` because `container.size() - end_skip` underflows, producing a very large number, and the loop will visit not only container elements at the end that should be skipped,
+it also buffer overruns.
+With an unsigned index we must first check that we shouldn't skip the entire loop.
+```cpp
+void work(Container& container, integer_t start_skip, integer_t end_skip)
+{
+	if (end_skip >= container.size())
+		return;
+
+	for (integer_t index = start; index < container.size() - end_skip; ++index)
+	{
+		// Work with contianer[index].
+	} 
+}
+```
+
+The initial `std::ptrdiff_t` loop fails if `start_skip` or `end_skip` is negative,
+since that will cause it to index out of bounds of the container.
+
+)
+
+
+Fixed sized integer types, which all primitive integer types are, have the drawback that they can only represent a limited range of values.
+When we try to use them outside of that range they wrap, trap, saturate, or trigger undefined behavior [(27)](https://blog.regehr.org/archives/1401).
+I most cases none of these produce the result we intended.
 A signed integer type is one that can represent both positive and negative numbers, and zero.
 An unsigned integer is one that can only represent positive numbers, including zero.
 The purpose for this note is to explore the pros and cons of using each in cases where it is not obvious, such as for sizes and indexing.
@@ -85,6 +143,104 @@ Since there are a number of bugs stepping from unintended conversions between si
 It has been difficult to find or come up with good illustrative examples that demonstrates the various problems described in this note.
 Examples are often trivial and hard to map to real-world production code.
 
+# Operations
+
+## Loop Over Container
+
+Looping over a container, such as an array or an `std::vector` is still a common operation.
+The classical for loop is written as follows:
+```cpp
+void work(Container& container)
+{
+	for (integer_t index = 0; index < container.size(); ++index)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+Things to be aware of [(28)](https://gustedt.wordpress.com/2013/07/15/a-praise-of-size_t-and-other-unsigned-types/):
+- Comparison between `index` and `container.size()`.
+	- May trigger an implicit conversion and unexpected behavior.
+	- If `integer_t` is signed and `container.size()` unsigned you may get a compiler warning.
+		- This is common.
+		- Prefer to keep the signedness the same for all values in an expression.
+- Increment of `index`.
+	- If the type of `container.size()` has a larger maximum value than `integer_t` then the `++index` at the end of each loop iteration may overflow.
+- Accessing a container element with `container[index]`.
+	- May trigger implicit conversion of `index`.
+- More?
+
+Since `container.size()` is often unsigned, specifically `std::size_t`, which is an indication that `integer_t` should be `std::size_t` as well.
+
+
+## Test If Index In Range
+
+[(28)](https://gustedt.wordpress.com/2013/07/15/a-praise-of-size_t-and-other-unsigned-types/)
+
+A common range is from zero to some positive number, such as the size of a container.
+With a signed integer type we must check both the lower and upper end of the range.
+With an unsigned integer we only need to check the upper range since the lower bound is built into the type.
+
+```cpp
+bool work(Container& container, std::ptrdiff_t index)
+{
+	if (index < 0 || index >= container.size())
+		return false;
+
+	// Work with container[index].
+
+	return true;
+}
+
+bool work(Container& container, std::size_t index)
+{
+	if (index >= container.size())
+		return false;
+
+	// Work with container[index].
+
+	return true;
+```
+
+
+## Iterate Backwards
+
+When iterating backwards we need to use different loop iteration conditions.
+With a signed loop counter we stop when the index becomes negative,
+because that means that we have gone past the start of the container.
+With an unsigned loop counter we stop when the index becomes larger than the container size,
+because that means that the counter wrapped around at zero.
+
+```cpp
+// Signed loop counter.
+void work(Container& container)
+{
+	for (std::ptrdiff_t index = container.size() - 1; index >= 0; --index)
+	{
+		// Workd with container[index].
+	}
+}
+
+// Unsigned loop counter.
+void work(Container& container)
+{
+	for (std::size_t index = container.size() - 1; index < container.size(); --index)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+The signed variant checks for, to me at least, more intuitive condition since the intention when the code was written was to loop from the size down to, and including, zero.
+The unsigned variant has a more familiar condition since it uses the same one for both forwards and backwards loops.
+To reverse the loop direction with an unsigned loop counter we simply start at the other end instead of the  beginning and step the other direction.
+To reverse the loop direction with a signed loop counter we must edit all three parts of the loop header.
+
+We cannot use the `index >= 0` condition with an unsigned counter because that expression is always true, for any value of `index`.
+We cannot use the `index < container.size()`  condition with a signed counter because it won't wrap at zero and negative indices will be passed to `container[index]`. Not good.
+
+
 # Common Bugs
 
 ## Incorrect Type Of Loop Control Variable
@@ -121,7 +277,7 @@ void work(Container& container)
 ```
 ## Implicit Conversion From Signed To Unsigned
 
-The compiler will implicitly convert signed values to unsigned when a signed and an unsigned operands of the same size are passed to an operator.
+The compiler will implicitly convert signed values to unsigned when a signed and an unsigned operand of the same size are passed to an operator.
 When `integer_t` is a signed type in the below example the operator is `>=` and the signed `index` function parameter is converted to the same unsigned type as `data.size()`.
 When `index` has a negative value the result of the conversion is a large negative value, which often will be larger than the size of the container and we enter the error reporting code block.
 
@@ -319,6 +475,11 @@ using it may be, depending on what it is being used for.
 Indexing into an array or `std::vector` would be undefined behavior.
 
 Another counter-point is that by making under- and overflow undefined behavior we allow tools, such as undefined behavior sanitizers to find them.
+
+## Underflow In Index Calculations Are Obvious
+
+If an application occasionally miscalculates an index to be negative that might not be noticed if using signed integer for indexing other than difficult-to-diagnose bugs.
+With unsigned integers for indexing the negative value becomes a very large value and likely a segmentation fault on the first use.
 
 ## Bit With Conversions Cheaper
 
@@ -1209,6 +1370,12 @@ A common way to detect odd numbers is `n % 2 == 1`.
 This does not work for negative `n` since the result is `-1` instead of `1`.
 Use `n % 2 != 0` instead.
 
+
+# Alternative Integer Representations
+
+Bignum, i.e. an arbitrary sized integer that allocates more space when needed [(27)](https://blog.regehr.org/archives/1401).
+Fixed size integer should only be used where needed, which is rare.
+
 # Alternatives To Indexing
 
 - Range based for loops.
@@ -1274,4 +1441,6 @@ I should make a list here.
 - 24: [_Is it a good practice to use unsigned values ?_ by \[deleted\] et.al @ reddit.com/cpp 2018](https://www.reddit.com/r/cpp/comments/7y0o6r/is_it_a_good_practice_to_use_unsigned_values/)
 - 25: [_Almost Always Unsiged_ by Dale Weiler @ graphitemaster.github.io 2022](https://graphitemaster.github.io/aau/)
 - 26: [_Amost Always Unsigned_ @ reddit.com/cpp 2022](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned/)
-- 
+- 27: [_Solutions to Integer Overflow_ by regehr @ regehr.org 2016](https://blog.regehr.org/archives/1401)
+- 28: [_a praise of size_t and other unsigned types_ by Jens Gustedt @ gustedt.wordpress.com 2013](https://gustedt.wordpress.com/2013/07/15/a-praise-of-size_t-and-other-unsigned-types/)
+
