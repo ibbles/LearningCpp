@@ -57,8 +57,81 @@ void work(Container& container, integer_t start_skip, integer_t end_skip)
 The initial `std::ptrdiff_t` loop fails if `start_skip` or `end_skip` is negative,
 since that will cause it to index out of bounds of the container.
 
+An even simpler, and I guess more common, variant is to visit all but the last element of a container.
+```cpp
+void work(Container& container)
+{
+	for (integer_t index = 0; index < container.size() - 1; ++index)
+	{
+		// Work with container[index].
+	}
+]
+```
+
+This fails with unsigned integers for empty containers.
+`container.size() - 1` becomes `0 - 1` which wraps around to a very large number,
+which causes the loop to run too many iterations.
+
+A signed `integer_t` doesn't save us here if `Container` is an `std::vector` since the problem is because `std::vector::size` has an unsigned return type.
+We must either explicitly check for the empty container case or make sure the end-of-range computation is done using a signed type.
+```cpp
+
+// Handle empty container separately before the loop.
+template <typename T>
+void work(std::vector<T>& container)
+{
+	if (container.empty())
+		return;
+
+	for (integer_t index = 0; index < container.size() - 1; ++index)
+	{
+		// Work with container[index].
+	}
+}
+
+// Use std::ssize instead of .size().
+template <typename T>
+void work(std::vector<T>& container)
+{
+	for (std:ptrdiff_t index = 0; index < std::ssize(container) - 1; ++index)
+	{
+		// Work with container[index].
+	}
+}
+
+// Cast the size before the subtraction.
+template <typename T>
+void work(std::vector<T>& container)
+{
+	for (std:ptrdiff_t index = 0;
+		index < static_cast<std::ptrdiff_t>(container.size()) - 1;
+		++index)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+Another variant is to not do the subtraction at all, and instead do addition on the other size of the less-than operator.
+```cpp
+void work(Container& container)
+{
+	for (integer_t index = 0; index + 1 < container.size(); ++index)
+	{
+		// Work with container[index].
+	}
+}
+```
 )
 
+The purpose of this note is to evaluate the advantages and disadvantages of using signed or unsigned integers,
+mainly for indexing operations.
+Both variants work and all problematic code snippets can be fixed using either type.
+They are what multiple authors and commentators could call "bad code, bad programmer".
+The aim has been to find examples where the straight-forward way to write something produces unexpected and incorrect behavior.
+If what the code says, or at least implies after a quick glance, isn't what the code does then there is a deeper problem than just "bad code, bad programmer".
+Real-world programmers writing real-world programs tend to have other concerns in mind than the minutiae of integer implicit conversion rules and overflow semantics.
+We want tools, language and compiler included, that help us prevent errors [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
 
 Fixed sized integer types, which all primitive integer types are, have the drawback that they can only represent a limited range of values.
 When we try to use them outside of that range they wrap, trap, saturate, or trigger undefined behavior [(27)](https://blog.regehr.org/archives/1401).
@@ -407,6 +480,11 @@ Another recommendation is to always use signed even in this case.
 
 Using unsigned is a natural choice when working with non-negative quantities such as indices and counts [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [25](https://graphitemaster.github.io/aau/).
 
+## The Type Used By Real Programmers
+
+Unsigned unsigned integers is absolutely safe if you know what you are doing and make no mistakes [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
+If you get burned by any of the pitfalls associated with using unsigned integers then you are a bad programmer [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
+Good tools create weak programmers, programming should be tough [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
 
 ## Makes Invalid Values Unrepresentable
 
@@ -514,11 +592,21 @@ Mixing signed and unsigned numbers adds even more surprising behavior.
 
 ## Can Detect Unintended Negative Values
 
-When an expression unintentionally produces a negative values we can detect that by simply checking if the result is smaller than 0.
-With unsigned integers we can't do that since there can't be any negative values.
-The only thin we can do is detect unexpectedly large positive values.
+When an expression unintentionally produces a negative values we can detect that by simply checking if the result is smaller than 0 [(30)](https://www.aristeia.com/Papers/C++ReportColumns/sep95.pdf).
+With unsigned integers we can't do that since there can't be any negative values [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
+In the following the `Container::Container(std::size_t size)` constructor creates a container with `size` elements.
+```cpp
+std::ptrdiff_t f();
+std::ptrdiff_t g();
+Container container(f() - g());
+```
+If for some reason `f()` returns a values smaller than `g()` we get a negative value that is implicitly converted to the unsigned `std::size_t`.
+
+There is no way to detect this after the fact, the only thing we can do is detect unexpectedly large positive values.
 But where do we draw the line?
 See _Disadvantages Of Unsigned_ > _Impossible To Detect Underflow_ for a longer discussion on this.
+
+Error detection like this especially important in public interfaces used by people other than ourselves.
 
 Example inspired by example in [_ES.106: Don’t try to avoid negative values by using unsigned_][https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es106-dont-try-to-avoid-negative-values-by-using-unsigned]:
 ```cpp
@@ -863,6 +951,17 @@ a < b // Evaluates to false because a is converted
       // to unsigned and wraps in the process.
 ```
 
+We can show that integers doesn't form a transitive set under an ordering operator (wording?) with the following setup  [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
+```cpp
+int i {-1};
+int j {1};
+unsigned k {2};
+
+i < j; // True.
+j < k; // True.
+k < i; // True.
+```
+
 Martin Beeger summarizes the mixing issue well  [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post15)
 
 > ... the unsigned-signed promotion and comparison rules are just a as
@@ -1030,6 +1129,7 @@ Can have surprising conversions to/from signed integers, see _Advantages Of Sign
 Programs very often deal with with zero and nearby values.
 That is right at the edge of underflow.
 Even a small mistake is enough to fall over the edge.
+This magnifies off-by-one errors [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
 This makes reverse loops non-trivial to write, the following classical example does not work:
 ```cpp
 void work(const Container& container)
@@ -1370,11 +1470,26 @@ A common way to detect odd numbers is `n % 2 == 1`.
 This does not work for negative `n` since the result is `-1` instead of `1`.
 Use `n % 2 != 0` instead.
 
+## Shift Operators Behavior Can Be Unexpected For Negative Numbers
 
-# Alternative Integer Representations
+
+
+# Alternative Integer Representations And Semantics
+
+## Bignum
 
 Bignum, i.e. an arbitrary sized integer that allocates more space when needed [(27)](https://blog.regehr.org/archives/1401).
 Fixed size integer should only be used where needed, which is rare.
+
+## Change The Conversion Rules
+
+It is problematic that operators require that the two operands have the same type.
+It would help if `<`, and the other operators, could treat mixed signedness like `std::cmp_less`, and the other functions in the `std::cmp_*` family of functions.
+Not sure how will this would work with arithmetic operators such as `+` and `*`.
+Convert to a larger signed type?
+What about the largest unsigned type?
+Require that `sizeof(intmax_t)` be larger than `sizeof(uintmax_t)`?
+That sounds... bad.
 
 # Alternatives To Indexing
 
@@ -1443,4 +1558,7 @@ I should make a list here.
 - 26: [_Amost Always Unsigned_ @ reddit.com/cpp 2022](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned/)
 - 27: [_Solutions to Integer Overflow_ by regehr @ regehr.org 2016](https://blog.regehr.org/archives/1401)
 - 28: [_a praise of size_t and other unsigned types_ by Jens Gustedt @ gustedt.wordpress.com 2013](https://gustedt.wordpress.com/2013/07/15/a-praise-of-size_t-and-other-unsigned-types/)
+- 29: [_Why are unsigned integers error prone?_ by Destructor et.al. @ stackoverflow.com 2015](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone)
+- 30: [_Signed and Unsigned Types in Interfaces_ by Scott Meyers @ aristeia.com 1995](https://www.aristeia.com/Papers/C++ReportColumns/sep95.pdf)
+- 31: [_Danger – unsigned types used here!_ by David Crocker @ critical.eschertech.com 2010](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/)
 
