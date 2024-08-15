@@ -124,6 +124,21 @@ void work(Container& container)
 ```
 )
 
+
+(
+TODO
+Find where to put the following, demonstrating unexpected widening [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
+This is similar to _Impossible To Detect Underflow_, but we compute the large value instead of being given it.
+```cpp
+std::uint32_t a {10};
+std::uint32_t b {11};
+std::int64_t c = a - b;
+// c is now std::numeric_limits<std::uint32_t>::max() despited being stored
+// in a signed variable. The problem is that we change the size. Had both
+// been 32-bit or 64-bit then it would have been fine.
+```
+)
+
 The purpose of this note is to evaluate the advantages and disadvantages of using signed or unsigned integers,
 mainly for indexing operations.
 Both variants work and all problematic code snippets can be fixed using either type.
@@ -132,6 +147,9 @@ The aim has been to find examples where the straight-forward way to write someth
 If what the code says, or at least implies after a quick glance, isn't what the code does then there is a deeper problem than just "bad code, bad programmer".
 Real-world programmers writing real-world programs tend to have other concerns in mind than the minutiae of integer implicit conversion rules and overflow semantics.
 We want tools, language and compiler included, that help us prevent errors [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
+
+For this discussion we assume a 64-bit machine with 32-bit `int`.
+Some results are different on other machines.
 
 Fixed sized integer types, which all primitive integer types are, have the drawback that they can only represent a limited range of values.
 When we try to use them outside of that range they wrap, trap, saturate, or trigger undefined behavior [(27)](https://blog.regehr.org/archives/1401).
@@ -215,6 +233,13 @@ Since there are a number of bugs stepping from unintended conversions between si
 
 It has been difficult to find or come up with good illustrative examples that demonstrates the various problems described in this note.
 Examples are often trivial and hard to map to real-world production code.
+
+# Dangers
+
+- Implicit type conversions with unexpected results happening in unexpected places.
+- Under- or overflow resulting in undefined behavior.
+- Unexpected or unintended wrapping.
+
 
 # Operations
 
@@ -350,7 +375,7 @@ void work(Container& container)
 ```
 ## Implicit Conversion From Signed To Unsigned
 
-The compiler will implicitly convert signed values to unsigned when a signed and an unsigned operand of the same size are passed to an operator.
+The compiler will implicitly convert signed values to unsigned when a signed and an unsigned operand of the same size are passed to an operator without checking that the signed value is even representable in the unsigned type [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
 When `integer_t` is a signed type in the below example the operator is `>=` and the signed `index` function parameter is converted to the same unsigned type as `data.size()`.
 When `index` has a negative value the result of the conversion is a large negative value, which often will be larger than the size of the container and we enter the error reporting code block.
 
@@ -661,7 +686,7 @@ unsigned short process_meshlets(
 ## The Underflow Is Farther Away From Common Numbers
 
 With signed integers we have a larger margin from commonly used values to the underflow edge [25](https://graphitemaster.github.io/aau/).
-Small mistakes are unlikely to cause and underflow.
+Small mistakes are unlikely to cause and underflow [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
 For unsigned types, that boundary point at the busiest spot, zero  [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
 
 ## Backwards Loops Easier To Write
@@ -826,7 +851,7 @@ void work(
 However, since most subtraction is incorrect anyway [25](https://graphitemaster.github.io/aau/) , this doesn't matter.
 Instead of computing the signed delta, use the absolute value of the delta:
 ```
-integer_t delta = max(x, y) - min(x, y);
+integer_t delta = std::max(x, y) - std::min(x, y);
 ```
 It won't be the value you wanted, but at least it will be legal and under-/overflow free.
 (I understand Dale Weiler doesn't mean it like that, but the whole discussion is weird to me.)
@@ -856,8 +881,16 @@ Unless we chose to use a different set of containers that use a signed integer t
 
 A goal should be to keep this front-of-mixed-signed-ness as small as possible.
 
+Since we cannot, in many applications, avoid negative, and thus signed, integers it is not unreasonable to confine the unsigned types as much as possible.
+As soon as we are given an unsigned value we check that it isn't too large and then cast it to signed.
+As soon as we need to supply an unsigned value somewhere we check that the signed value we have isn't negative and then cast it to unsigned [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
+
 A counter-point is that if a function is so large that it becomes difficult to track which variables are signed and which are unsigned then the function should be split anyways.
 Trying to force everything to the same signedness is a false sense of security.
+
+A counter-point to that is that as programmers we absolutely do not want to discard whatever we currently have in our own working memory, for example while debugging, to start analyzing the impacts of possible implicit conversions, sign extensions, and wrapping behavior.
+We want code to do what it looks like the code is doing.
+We cannot memorize an ever-growing number of tricks and idioms to make loops using unsigned counters work correctly in all edge and corner cases.
 
 Example error case:
 ```cpp
@@ -1128,7 +1161,7 @@ Can have surprising conversions to/from signed integers, see _Advantages Of Sign
 
 Programs very often deal with with zero and nearby values.
 That is right at the edge of underflow.
-Even a small mistake is enough to fall over the edge.
+Even a small mistake is enough to fall over the edge [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
 This magnifies off-by-one errors [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
 This makes reverse loops non-trivial to write, the following classical example does not work:
 ```cpp
@@ -1464,6 +1497,61 @@ if ((b > 0 && a > INT_MAX - b) || (b < 0 && a < INT_MIN - b))
 if ((b > 0 && a < INT_MIN + b) || (b < 0 && a > INT_MAX + b))
 ```
 
+## Must Use A Larger Type To Store Unsigned Input
+
+If you receive input data, such as from a network or sensor, that is defined to be unsigned then you must store it in a signed type that is twice as large as the original data type [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
+A 16-bit unsigned value must be stored in a 32-bit signed value to ensure that all valid input values can be represented in the signed type.
+This, potentially, leads to a lot of wasted memory.
+
+There is the potential for security vulnerabilities if we fail to do this.
+In the following the programmer read the message protocol specification and saw that buffer lengths are stored as 32-bit integers and read the buffer length into a 32-bit signed integer.
+If a message with a buffer larger than `std::numeric_limits<std::int32_t>::max()`, which is possible when the value is actually unsigned, then `num_bytes` will hold a negative value.
+Execution will pass the `num_bytes > 64` check since it is negative.
+Bad things happen in the call to `read`.
+`num_bytes` may be negative, but when passed to the, presumably, unsigned second parameter to `read` we actually pass a very large value.
+This not only overflows the `buff` buffer, it also reads bytes that was mean for another reader.
+```cpp
+bool work(Socker& socket)
+{
+	char buff[64];
+	std::int32_t num_bytes = socket.read_uint32();
+	if (num_bytes > sizeof(buff))
+		return false;
+	std::int32_t num_read = socket.read(buff, num_bytes);
+	return num_read == num_bytes;
+}
+```
+
+Checking both sides of the range, as described in _Require Two Comparisons For Range Checks_ then we would at least avoid the buffer overflow, but it is still wrong.
+```cpp
+	if (num_bytes < 0 || num_bytes > sizeof(buff))
+		return false;
+```
+
+The proper solution is to use a signed type large enough to hold all possible input values.
+```cpp
+bool work(Socket& socket)
+{
+	char buff[64];
+	std::int64_t num_bytes = socket.read_uint32();
+	assert(num_bytes >= 0);
+	if (num_bytes > sizeof(buff))
+		return false;
+	std::int32_t num_read = socket.read(buff, num_bytes);
+	return num_read == num_bytes;
+}
+```
+In this case we can assert, as opposed to check, that `num_bytes` is not negative since there is no 32-bit unsigned integer bit pattern that is converted to a negative `std::int64_t`.
+Since we know that we have a positive number in `num_bytes` that came from a 32-bit unsigned integer, we also know that the implicit conversion back to an unsigned 32-bit, or larger, value in the call to `read` will be value-preserving.
+
+We do have a problem though if the buffer size is sent as a 64-bit unsigned value that really can be larger than `std::numeric_limits<std::int64_t>::max()`.
+In that case we have no option but to use an unsigned type since on most platforms we don't have a 128-bit integer type.
+(
+At least not a standardized one.
+Clang and GCC have `__int128` with limited library support.
+I don't know of any MSVC extension for an 128 bit integer type.
+)
+
 ## The Modulus Operator Behavior Can Be Unexpected For Negative Numbers
 
 A common way to detect odd numbers is `n % 2 == 1`.
@@ -1472,6 +1560,33 @@ Use `n % 2 != 0` instead.
 
 ## Shift Operators Behavior Can Be Unexpected For Negative Numbers
 
+TODO
+Description and examples here.
+
+# Recommendations
+
+What can a programmer do today to avoid as many pitfalls as possible?
+
+## Alternatives To Indexing
+
+Don't use explicit indices at all, do something else instead.
+
+- Range based for loops.
+	- Less flexible than index-based loops.
+- The ranges library.
+- Named algorithms.
+- Iterators.
+
+Rust has a range based loop construct that has built-in support for backwards looping [25](https://graphitemaster.github.io/aau/).
+```rust
+fn work(Container container)
+{
+	for index in (0..container.size()).rev()
+	{
+		// Woth with container[index].]
+	}
+}
+```
 
 
 # Alternative Integer Representations And Semantics
@@ -1491,24 +1606,6 @@ What about the largest unsigned type?
 Require that `sizeof(intmax_t)` be larger than `sizeof(uintmax_t)`?
 That sounds... bad.
 
-# Alternatives To Indexing
-
-- Range based for loops.
-	- Less flexible than index-based loops.
-- The ranges library.
-- Named algorithms.
-- Iterators.
-
-Rust has a range based loop construct that has built-in support for backwards looping [25](https://graphitemaster.github.io/aau/).
-```rust
-fn work(Container container)
-{
-	for index in (0..container.size()).rev()
-	{
-		// Woth with container[index].]
-	}
-}
-```
 
 # Signed Overloads In The Standard Library
 
