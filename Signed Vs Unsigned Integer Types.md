@@ -267,11 +267,18 @@ Since there are a number of bugs stepping from unintended conversions between si
 It has been difficult to find or come up with good illustrative examples that demonstrates the various problems described in this note.
 Examples are often trivial and hard to map to real-world production code.
 
+A problem is that signed and unsigned expresses multiple properties and it is not always possible to get the exact combination that we want.
+- Modular arithmetic.
+- Value may only be positive.
+- Value can be negative.
+- Over / underflow not possible / not allowed.
+
 # Dangers
 
 - Implicit type conversions with unexpected results happening in unexpected places.
 - Under- or overflow resulting in undefined behavior.
 - Unexpected or unintended wrapping.
+- Comparing signed and unsigned.
 
 
 # Operations
@@ -370,6 +377,28 @@ To reverse the loop direction with a signed loop counter we must edit all three 
 
 We cannot use the `index >= 0` condition with an unsigned counter because that expression is always true, for any value of `index`.
 We cannot use the `index < container.size()`  condition with a signed counter because it won't wrap at zero and negative indices will be passed to `container[index]`. Not good.
+
+Another variant that works with unsigned indices is the following [(33)](https://stackoverflow.com/questions/10040884/signed-vs-unsigned-integers-for-lengths-counts).
+```cpp
+void work(Container& container)
+{
+	std::size_t index {container.size());
+	while (index-- > 0)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+Here we use the post-fix decrement operator within the loop condition.
+This means that index starts one-past the actual index we want to work on, but it is decremented to a valid index in the loop header before it is first used to index into the container.
+If there is no valid index, i.e. the container is empty, then `index` starts at 0 and the condition, which sees the initial value of 0, ends the loop immediately since 0 isn't larger than 0.
+If the container is non-empty then we first get the size of the container, check it against 0 and find that we should enter the loop, the index is decrement to the last valid index, and then we use that index to access an element in the container.
+Then the once-decremented index is tested against 0 and if still larger then we do another round in the loop.
+It some point `index` becomes 1, which means that we are about the enter the last loop iteration.
+The condition tests `1 > 0`, `index` is decremented to 0 and we access `container[0]`.
+Then we do the last condition check with `index` being zero, which evaluates to false and the loop ends.
+The final decrement still happens so at the end of the loop `index` is `std::numeric_limits<std::size_t::max()`.
 
 
 # Common Bugs
@@ -486,6 +515,19 @@ void work(std::span<byte> data)
 }
 ```
 
+
+# Illegal Operations
+
+## Signed
+
+## Unsigned
+
+- Division by zero.
+- Shift by more than the bit width.
+- Multiplying two unsigned integers with a size smaller than `int` with a result out of range for `int`.
+	- This is because integers smaller than `int` are promoted to `int` before use, which means that the operation is subjected to all the limitations of signed integer arithmetic, including overflow being undefined behavior. This is problematic with multiplication because, on a platform where `int` is 32-bit, there are `uint32_t` values that when multiplied produces a result larger than `std::numeric_limits<int>>::max`, and thus overflow, and thus undefined behavior.
+
+
 # Standard Library
 
 Many containers in the standard library use `size_t`, which is an unsigned type, for indexing and counts.
@@ -570,10 +612,12 @@ For consistency, we should also use `std::size_t` for other sizes, such as the n
 
 ## Larger Positive Range
 
-An unsigned integer can address twice as many container elements as an equally-sized signed integer can.
+An unsigned integer can address twice as many container elements as an equally-sized signed integer can [(33)](https://stackoverflow.com/questions/10040884/signed-vs-unsigned-integers-for-lengths-counts).
 If you don't need a sign then don't spend a bit on it.
 When no negative numbers are required, unsigned integers are well-suited for networking and systems with little memory, because unsigned integers can store more positive numbers without taking up extra memory.
 This may be important when the index type is small [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [(18)](https://softwareengineering.stackexchange.com/questions/338088/size-t-or-int-for-dimensions-index-etc), such as 16 or possibly even 32-bit in some cases.
+On 32-bit machines we don't want to be limited to 2 GiB `std::byte` buffers since we have up to 4 GiB of address space.
+This is not a problem for element types larger than a single byte since by then even a signed integer is able to address all of memory due to the size multiplication.
 I'm not sure when this will become a restriction for 64-bit signed indices, the largest `std::ptrdiff_t` value is 9'223'372'036'854'775'807.
 For most modern applications on modern hardware the extra bit is not necessary [(15)](https://youtu.be/Puio5dly9N8?t=2561), does not come up in practice very much.
 The limitation only comes into effect when the container contains single-byte elements such as char,
@@ -1028,6 +1072,8 @@ j < k; // True.
 k < i; // True.
 ```
 
+When the index comes from a non-trivial arithmetic expression - each type conversion incurs additional cost, be it in the form of additional runtime checks, reduced code clarity or a risk of semantic mistakes. So, for this scenario, there is an objective preference: we want to use the same type for indexes as is used for the majority of arithmetic expressions that generate them [(21)](https://internals.rust-lang.org/t/subscripts-and-sizes-should-be-signed/17699).
+
 Martin Beeger summarizes the mixing issue well  [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post15)
 
 > ... the unsigned-signed promotion and comparison rules are just a as
@@ -1190,6 +1236,17 @@ Either with an output parameter, returning a tuple or a struct, returning an opt
 They model modular arithmetic.[(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf)
 Can have surprising conversions to/from signed integers, see _Advantages Of Signed_ > _Less Mixing Of Signed And Unsigned_.
 
+
+## Easy To Accidentally Write Conditions That Are Always True Or Always False
+
+Such as `unsigned_value >= 0` [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
+For example
+```cpp
+for (std::size_t i = container.size(); i >= 0; --i)
+```
+
+See _Advantages Of Signed_ > _Backwards Loops Easier To Write_.
+
 ## The Underflow Edge Is Close To Common Numbers
 
 Programs very often deal with with zero and nearby values.
@@ -1232,7 +1289,9 @@ void work(Container& container)
 }
 ```
 The above does not work when the container is empty  since `container.size()`
-## Impossible To Detect Underflow
+
+
+## Impossible To Reliably Detect Underflow
 
 It is impossible to detect earlier arithmetic underflow, other than with heuristics.
 By the time we get to the `work` function the damage has already been done.
@@ -1258,19 +1317,39 @@ void work(const Container& container, std::size_t index)
 
 What should `VERY_LARGE_NUMBER` be set to?
 The smaller we set it to the more cases of underflow we are able to detect, but we also further restrict the set of allowed sizes for the container.
-The larger we set it the bigger containers we support, but we risk missing underflows that wrap past the boundary and incorrectly enter into the legal range again.
+The larger we set it the bigger containers we support, but we risk missing underflows that wrap past the zero/max boundary and incorrectly enter into the legal range again.
 
-Signed types also has the same problem, but it is less frequent in practice (`citation needed`) since the underflow happens a much farther away from commonly used numbers.
+Signed types also has the same problem, but it is less frequent in practice (`citation needed`) since the underflow happens much farther away from commonly used numbers.
 For unsigned types the underflow happens near 0 and a lot of real-world arithmetic is done near 0.
 Also, underflow with signed integer types is undefined behavior.
 
 The result is that using a signed integer type is similar to setting `VERY_LARGE_NUMBER` to the halfway-point between 0 and the maximum representable value.
 So when using unsigned integers for indices we have the flexibility to set `VERY_LARGE_NUMBER` larger than that and thereby support larger containers.
 
-But it gets worse.
-In some cases we can end up in a case where a small signed negative becomes a large but not very large unsigned value.
+if we know the maximum value a parameter may have, such as when indexing in to a container, then we can use the size of the container to detect invalid values.
+This does not work when the container doesn't have a size yet, such as when first allocating it.
+In that case we have nothing to compare against and if a "negative" value is computed and passed to the allocation function then we will get a lot more memory than we expected,
+or a memory allocation error.
+
+```cpp
+Container allocate(std::size_t allocation_size)
+{
+	Container container;
+	if (allocation_size > VERY_LARGE_NUMBER)
+	{
+		report_error("Possible arithmetic underflow detected in allocate.");
+		return container;
+	}
+	container.resize(allocation_size);
+	return container;
+}
+```
+
+There are cases where the `allocation_size > VERY_LARGE_NUMBER` heuristic check fails to detect a prior unsigned underflow or a signed negative value.
+In some cases we can end up in a case where a small signed negative becomes a large but not a very large unsigned value.
 It takes a few steps:
 ```cpp
+// Actual work function, where we use the computed index.
 void work_3(
     Container& container,
     std::size_t index)
@@ -1284,6 +1363,8 @@ void work_3(
 	// Work with container[index].
 }
 
+// Intermediate function that takes unsigned int and passes that
+// to an std::size_t parameter.
 void work_2(
     Container& container,
     unsigned int index // Unsigned type smaller than std::size_t.
@@ -1298,6 +1379,8 @@ void work_2(
     work_3(container, index);
 }
 
+// Intermediate function that takes a signed int and passes that
+// to an unsigned int parameter.
 void work_1(
     Container& container,
     int index
@@ -1498,6 +1581,14 @@ struct Positive
 }
 ```
 
+## Small Index Calculation Errors Causes Misbehaving Programs
+
+With unsigned indexing if you accidentally compute a "negative" value and use that to index into a container you will often get a very obvious error since it will try to read very far off into memory.
+Likely a crash.
+With unsigned indexing a slight miscalculation resulting in a small negative number will cause indexing into a container to access memory  close to the elements and likely valid accessible memory [(21)](https://internals.rust-lang.org/t/subscripts-and-sizes-should-be-signed/17699).
+Memory that is used for something else.
+This can lead to hard to diagnose errors since the bug manifests itself elsewhere, possibly far from where the actual error, the bad container access, really is.
+Debug builds, asserts, and possibly memory sanitizers, can help identify such problems.
 
 ## Under- And Overflow Is Undefined Behavior
 
@@ -1692,4 +1783,7 @@ I should make a list here.
 - 30: [_Signed and Unsigned Types in Interfaces_ by Scott Meyers @ aristeia.com 1995](https://www.aristeia.com/Papers/C++ReportColumns/sep95.pdf)
 - 31: [_Danger – unsigned types used here!_ by David Crocker @ critical.eschertech.com 2010](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/)
 - 32: [_Should signed or unsigned integers be used for sizes?_ by Martin Ueding et.al. @ stackoverflow.com 2017](https://stackoverflow.com/questions/47283449/should-signed-or-unsigned-integers-be-used-for-sizes)
+- 33: [_Signed vs. unsigned integers for lengths/counts_ by user1149224 et.al @ stackoverflow.com 2012](https://stackoverflow.com/questions/10040884/signed-vs-unsigned-integers-for-lengths-counts)
+- 34: [_Signed Integers Considered Harmful - Robert Seacord - NDC TechTown 2022_ by Robert C. Seacord @ youtube.com 2022](https://www.youtube.com/watch?v=Fa8qcOd18Hc)
+
 
