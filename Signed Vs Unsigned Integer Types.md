@@ -186,7 +186,7 @@ Some results are different on other machines.
 
 Fixed sized integer types, which all primitive integer types are, have the drawback that they can only represent a limited range of values.
 When we try to use them outside of that range they wrap, trap, saturate, or trigger undefined behavior [(27)](https://blog.regehr.org/archives/1401).
-I most cases none of these produce the result we intended.
+In most cases none of these produce the result we intended, and often lead to security vulnerabilities [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc), with exceptions for algorithms that explicitly need wrapping behavior such as some encryption algorithms.
 A signed integer type is one that can represent both positive and negative numbers, and zero.
 An unsigned integer is one that can only represent positive numbers, including zero.
 The purpose for this note is to explore the pros and cons of using each in cases where it is not obvious, such as for sizes and indexing.
@@ -213,8 +213,14 @@ TODO For each advantage / disadvantage describe how it affects the priorities li
 )
 
 In this note `integer_t` is an integer type that is an alias for either `std::size_t` or `std::ptrdiff_t` depending on if we use signed or unsigned indexing.
+`std::size_t` is an unsigned integer large enough to hold the size of any object,
+including heap allocated buffers.
+`std::ptrdiff_t` is a signed type used to represent the difference between two pointers.
+It is "meant" to be large enough to hold the difference between any two pointers pointing within the same object, but that isn't necessarily true since `std::size_t` and `std::ptrdiff_t` typically have the same size and if we have an object with size `std::numeric_limits<std::size_t>::max()` and a pointer to the first byte and a pointer to the last byte then `std::numeric_limits<std::ptrdiff_t>::max()`  is smaller than the difference between them.
 (
 Is there any difference between `intptr_t` and `std::ptrdiff_t`?
+On some machines it is, such as those with segmented memory.
+Most modern machine have a flat memory address space.
 )
 In this note `unsigned_integer_t` is an alias for `std::size_t`.
 In this note `signed_integer_t` is an alias for `std::ptrdiff_t`.
@@ -268,7 +274,7 @@ It has been difficult to find or come up with good illustrative examples that de
 Examples are often trivial and hard to map to real-world production code.
 
 A problem is that signed and unsigned expresses multiple properties and it is not always possible to get the exact combination that we want.
-- Modular arithmetic.
+- Modular arithmetic / wrapping.
 - Value may only be positive.
 - Value can be negative.
 - Over / underflow not possible / not allowed.
@@ -760,11 +766,18 @@ unsigned short process_meshlets(
 }
 ```
 
-## The Underflow Is Farther Away From Common Numbers
+## Underflow Is Farther Away From Common Numbers
 
 With signed integers we have a larger margin from commonly used values to the underflow edge [25](https://graphitemaster.github.io/aau/).
+Signed values are well-behaved around zero, a common value [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 Small mistakes are unlikely to cause and underflow [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
 For unsigned types, that boundary point at the busiest spot, zero  [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
+
+Tough beware of malicious inputs that intentionally bring the program close to the domain boundaries [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
+Just because the limits are far away from the common values doesn't mean that we can ignore them.
+That is something that is easier to do, accidentally or not, if we don't expect them to ever appear.
+
+Relying on the negative domain of signed integers to skip bounds checking is an appeal to luck, which is not something we should do.
 
 ## Backwards Loops Easier To Write
 
@@ -1242,15 +1255,18 @@ Can have surprising conversions to/from signed integers, see _Advantages Of Sign
 Such as `unsigned_value >= 0` [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 For example
 ```cpp
-for (std::size_t i = container.size(); i >= 0; --i)
+for (std::size_t i = container.size(); i >= 0; --i) { /* Do stuff. */
 ```
 
-See _Advantages Of Signed_ > _Backwards Loops Easier To Write_.
+This is not illegal per the language, this code should compile without error.
+You may get a warning, but that is just the compiler trying to be helpful.
+
+See also _Advantages Of Signed_ > _Backwards Loops Easier To Write_.
 
 ## The Underflow Edge Is Close To Common Numbers
 
 Programs very often deal with with zero and nearby values.
-That is right at the edge of underflow.
+That is right at the edge of underflow [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 Even a small mistake is enough to fall over the edge [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
 This magnifies off-by-one errors [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
 This makes reverse loops non-trivial to write, the following classical example does not work:
@@ -1295,6 +1311,8 @@ The above does not work when the container is empty  since `container.size()`
 
 It is impossible to detect earlier arithmetic underflow, other than with heuristics.
 By the time we get to the `work` function the damage has already been done.
+This is a common source of vulnerabilities and memory safety issues  [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
+
 In the code below the programmer decided that the container passed to `work` should never contain more than `VERY_LARGE_NUMBER`, some constant defined somewhere, and any index argument larger than that is a sign that we had an underflow in the computation of that argument.
 
 ```cpp
@@ -1409,7 +1427,7 @@ For unsigned integers the edge is at 0, for signed integers it is at some large 
 
 ## Under- And Overflow Is Not An Error
 
-And thus not reported by error detection tools such as undefined behavior sanitizers.
+And thus not reported by error detection tools such as undefined behavior sanitizers, unless explicitly enabled with `-fsanitize=unsigned-integer-overflow` but beware that this may trigger on intentional wrapping.
 
 ```cpp
 std::size_t x = /* Expression. */;
@@ -1425,7 +1443,7 @@ For more on this, see _Advantages Of Signed_ > _Less Mixing Of Signed And Unsign
 
 ## Backwards Loops Non-Trivial To Write
 
-An operation that is often written incorrectly with unsigned types is backwards loops.
+An operation that is often written incorrectly with unsigned types is backwards loops [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 ```cpp
 void work(const Container& container)
 {
@@ -1436,24 +1454,57 @@ void work(const Container& container)
 }
 ```
 
-`index >= 0` will always be true when `index_t` is unsigned.
+`index >= 0` will always be true when `index_t` is unsigned, so we get an infinite loop.
 
-A less obvious variant is
+A fix is to offset the indexing by one.
+The loop counter is always one larger than the index to work on,
+starting at `container.size()` and ending on, i.e. not entering the loop body when, it becomes 0.
 ```cpp
-void work(const Container& container)
+void work(Container& container)
 {
-	for (integer_t i = container.size(); i > 0; i -= 2)
+	for (integer_t i = container.size(); i > 0; i--)
 	{
 		const integer_t index = i - 1
-		// Work on container[index];
+		// Work on container[index].
 	}
 }
 ```
 
-Here the condition is `i > 0` so we will stop when we reach 1, which works when walking with stride 1.
+This works for both signed and unsigned loop counters.
+
+This technique fails for unsigned loop counters when the step-size is larger than 1.
+```cpp
+void work(Container& container)
+{
+	for (integer_t i = container.size(); i > 0; i -= 2)
+	{
+		const integer_t index = i - 1
+		// Work on container[index].
+	}
+}
+```
+
+Here the condition is `i > 0` so we will stop after having processed `i = 1`, i.e. index 0, which works when walking with stride 1.
 But here we work with stride 2 and may miss 0 and instead wrap back up the very large values when using unsigned integer.
-There error will happen half of the time, on average, assuming the contains has a random number of elements each time.
+The error will happen half of the time, on average, assuming the contains has a random number of elements each time.
+Even number: works fine. Odd number: wrap around to large values.
 With a singed integer we instead compare `-1 > 0` and things work as we intended.
+
+A solution that works for unsigned loop counters is to invert the loop condition.
+Instead of allowing indices that are above the lower bound, 0, we allow indices that are below than the upper bound, the container size.
+In essence, we terminate the loop when we detect wrap-around to a very large value.
+```cpp
+void work(Container& container)
+{
+	for (std::size_t index = container.size() - 1; index < container.size(); --i)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+This works for unsigned loop counters but not for signed loop counters since after 0 they would step to -1, which is not a valid index.
+A drawback of this approach is that in many cases we don't want wrap around and may run our program with `-fsanitize=unsigned-integer-overflow`, and that would trigger on this (indented) wrap-around.
 
 
 # Disadvantages Of Signed
@@ -1463,16 +1514,33 @@ With a singed integer we instead compare `-1 > 0` and things work as we intended
 The standard library uses unsigned integer types for many things, in particular `size_t size() const` and `T& operator[](size_t index)`.
 This makes working with the standard library with `integer_t` being signed difficult since we are forced to mix signed and unsigned values in expressions and get sign-conversion warnings all over the place if `-Wsign-conversion` is enabled,
 or explicitly cast our index variables from signed to unsigned on every container access.
-This creates verbose, noisy, and difficult to read code.
+This creates verbose, noisy, and difficult to read code, and we risk incorrect behavior if we ever encounter a `std::size_t`  value larger than `std::numeric_limits<std::ptrdiff_t>::max()` [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc)****.
+It is unclear how such a case should be handled.
+The same is true for interactions with much of the C standard library, `strlen`, `memcpy`, and such.
 ```cpp
 void work(Container& container)
 {
-	for (std::ptrdiff_t index = 0; index < container.size(); ++index)
+	std::size_t const max_allowed_size =
+		static_cast<std::size_t>(std::numeric_limits<std::ptrdiff_t>::max());
+	if (container.size() > max_allowed_size)
+	{
+		report_error("Too large container passed to work, cannot process it.")
+		return;
+	}
+
+	std::ptrdiff_t size = static_cast<std::ptrdiff_t>(container.size());
+	// Can also use
+	//    index < std::ssize(container)
+	for (std::ptrdiff_t index = 0; index < size; ++index)
 	{
 		// Work with container[static_cast<std::size_t>(index)].
 	}
 }
 ```
+
+I'm not sure if it is legal to cast a `std::size_t` larger than the largest `std::ptrdiff_t` to a `std::ptrdiff_t`, or if that is undefined behavior.
+In practice, it is often converted to a negative value, which is what the bit pattern would represent in the signed type since the most significant bit is set and most machines uses two's complement to represent signed integers.
+This would cause immediate termination of the loop if we didn't have the size guard [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 
 The C++ Core Guidelines are conflicted on this issue.
 [ES.100](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es100-dont-mix-signed-and-unsigned-arithmetic) says that we should not mix signed and unsigned integers and [ES.102](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es102-use-signed-types-for-arithmetic) says that we should use signed integers for indices.
@@ -1686,6 +1754,19 @@ Use `n % 2 != 0` instead.
 
 TODO
 Description and examples here.
+
+## Invites To Doing Inline Error Reporting
+
+An inline error reporting is where you use the main communication channel, where the expected data should go, to communicate error information.
+For a function the main communication channel is the return value.
+A common mistake is to return a negative value, or other special value, to signal an error, the absence of a result.
+This is bad practice, you should separate out your errors from your values [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
+There are other ways to communicate that a result could not be produced:
+- Out parameter.
+- Exception.
+- `std::optional`.
+- `std::expected`.
+- Assert.
 
 # Recommendations
 
