@@ -492,6 +492,139 @@ Without warnings is can be difficult to find all the places where changing the t
 IDE's and other tools can help within the same project but projects that use our code is more difficult.
 The developers on that project may not even be aware that the type changed.
 
+## Overflow Or Wrapping
+
+We must ensure we never cause an overflow when computing indices or buffer sizes [(37)](https://wiki.sei.cmu.edu/confluence/display/c/INT30-C.+Ensure+that+unsigned+integer+operations+do+not+wrap).
+
+Overflow detection with unsigned integers, two variants.
+```cpp
+bool work(Container& container, std::size_t base, std::size_t offset)
+{
+	if (std::numeric_limits<std::size_t>::max() - base < offset)
+	{
+		report_error("Overflow in index calculation.");
+		return false;
+	}
+	std::size_t index = base + offset;
+	// Work with container[index].
+	return true;
+}
+
+bool work(Container& container, std::size_t base, std::size_t offset)
+{
+	std::size_t index = base + offset;
+	if (index < base)
+	{
+		report_error("Overflow in index calculation.");
+		return false;
+	}
+	// Workd with container[index}.
+	return true;
+}
+```
+
+Overflow detection with signed integers.
+```cpp
+bool work(Container& container, std::ptrdiff_t base, std::ptrdiff_t offset)
+{
+	if (base ^ offset >= 0)
+	{
+		if (base >= 0)
+		{
+			if (std::numeric_limits<std::ptrdiff_t>::max - base <= offset)
+			{
+				report_error("Overflow in index calculation.");
+				return false;
+			}
+		}
+		else
+		{
+			if (std::numeric_limits<std::ptrdiff_t>::min() - base <= offset)
+			{
+				report_error("Overflow in index calculations.");
+				return false;
+			}
+		}
+	}
+
+	std::ptrdiff_t index = base + offset.
+	// Work with container[index].
+	return true;
+}
+```
+
+(
+I'm not 100% sure that the above overflow detection for signed integers is correct.
+It is based on a code snippet similar to the following from [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc?t=2911) but with the conditions inverted to early-fail instead of early success.
+```cpp
+bool can_add(std::ptrdiff_t base, std::ptrdiff_t offset)
+{
+	if (base ^ offset < 0)
+	{
+		return true;
+	}
+	else
+	{
+		if (base >= 0)
+		{
+			if (std::numeric_limits<std::ptrdiff_t>::max() - base > offset)
+			{
+				return true;
+			}
+		}
+		else
+		{
+			if (std::numeric_limits<std::ptrdiff_t>::min() - base > offset)
+			{
+				return true;
+			}
+		}
+	}
+	
+	return false;
+```
+)
+
+Similar checks exists for subtraction and multiplication as well [(37)](https://wiki.sei.cmu.edu/confluence/display/c/INT30-C.+Ensure+that+unsigned+integer+operations+do+not+wrap).
+
+A real-world example of a vulnerability caused by a an integer overflow is the following code from the SVG viewer in Firefox 2.0 [(38)](https://bugzilla.mozilla.org/show_bug.cgi?id=360645):
+```cpp
+pen->num_vertices = _cairo_pen_vertices_needed(
+	gstate->tolerance, radius, &gstate->ctm);
+pen->vertices = malloc(
+	pen->num_vertices * sizeof(cairo_pen_vertex_t));
+```
+
+With a sufficiently large `stroke-width` in an SVG file, the linked bug report used a width a few times wider than the earth-sun distance, the call to `_cairo_pen_vertices_needed` will return a very large number. 
+When multiplied with `sizeof(cairo_pen_vertex_t` the computation overflows and the buffer allocated becomes too small to hold the vertex data.
+The fix in this case was to detect very large vertex counts and reject the SVG file.
+```cpp
+pen->num_vertices = _cairo_pen_vertices_needed(
+	gstate->tolerance, radius, &gstate->ctm);
+
++    /* Make sure we don't overflow the size_t for malloc */
++    if (pen->num_vertices > 0xffff)
++    {
++        return CAIRO_STATUS_NO_MEMORY;
++    }
+
+pen->vertices = malloc(
+	pen->num_vertices * sizeof(cairo_pen_vertex_t));
+```
+
+Another option is to use a more lenient rejection limit.
+```cpp
+pen->num_vertices = _cairo_pen_vertices_needed(
+	gstate->tolerance, radius, &gstate->ctm);
+
++  if (pen->num_vertices > SIZE_MAX / sizeof(cairo_pen_vertex_t))
++  {
++    return CAIRO_STATUS_NO_MEMORY;
++  }
+
+pen->vertices = malloc(
+	pen->num_vertices * sizeof(cairo_pen_vertex_t));
+```
 ## /
 
 
@@ -636,7 +769,7 @@ At least [GCC's standard library implementation of `vector` is limited](https://
 
 ## Single-Comparison Range Checks
 
-Only need to check one side of the range for indexing.
+Only need to check one side of the range for indexing [(36)](https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR50-CPP.+Guarantee+that+container+indices+and+iterators+are+within+the+valid+range).
 
 ```cpp
 // Unsigned index.
@@ -647,6 +780,8 @@ if (index < 0 || index >= container.size())
 ```
 
 This assumes the computation of `index` didn't underflow before we got here, which is impossible to detect after the fact.
+The situation is made worse if we don't have an known upper bound to check against,
+such as when resizing a container.
 See _Disadvantages Of Unsigned_ > _Impossible To Detect Underflow_ for a longer discussion on this.
 
 This may come with a performance improvement dues to the smaller number of instructions,
@@ -1590,7 +1725,7 @@ Since unsigned integers cannot be negative there is no need to test whether a gi
 So it is enough to test the index against one end of the range,
 since the other end is built into the type.
 
-With a signed type, since it can contain negative values, we must also check the lower end of the range, i.e. 0.
+With a signed type, since it can contain negative values, we must also check the lower end of the range, i.e. 0 [(36)](https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR50-CPP.+Guarantee+that+container+indices+and+iterators+are+within+the+valid+range).
 
 ```cpp
 // Unsigned index.
@@ -1783,11 +1918,17 @@ There are other ways to communicate that a result could not be produced:
 
 ## More Operators With Problematic Semantics
 
-Given a listing of all operators on signed and unsigned integers a larger fraction of can produce undefined behavior when operating on signed integers compared to the fraction of operators that can produce wrap around when operating on unsigned integers [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc?t=2643).
-There are more things that can go wrong with them.
+Given a listing of all operators on signed and unsigned integers a larger fraction of them can produce undefined behavior when operating on signed integers compared to the fraction of operators that can produce wrap around when operating on unsigned integers [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc?t=2643).
+There are more things that can go wrong with signed integers.
 This is because when using two's complement representation of signed integers we have one more negative number than we have positive ones.
 We can't negate the most negative value because there is no corresponding positive value.
-The same is true for dividing by or taking the remainder of that number and -1.
+Which means that we also can't take its absolute value, i.e. `std::abs(singed)` is not a safe operation.
+The same is true for dividing by or taking the remainder of the most negative number and -1.
+
+The following identities does not hold with signed integers [(35)](https://lemire.me/blog/2017/05/29/unsigned-vs-signed-integer-arithmetic):
+- `a/b = sign(b) * a / abs(b)`
+- `a * b = sign(a) * sign(b) * abs(a) * abs(b)`
+
 
 # Recommendations
 
@@ -1887,5 +2028,8 @@ I should make a list here.
 - 32: [_Should signed or unsigned integers be used for sizes?_ by Martin Ueding et.al. @ stackoverflow.com 2017](https://stackoverflow.com/questions/47283449/should-signed-or-unsigned-integers-be-used-for-sizes)
 - 33: [_Signed vs. unsigned integers for lengths/counts_ by user1149224 et.al @ stackoverflow.com 2012](https://stackoverflow.com/questions/10040884/signed-vs-unsigned-integers-for-lengths-counts)
 - 34: [_Signed Integers Considered Harmful - Robert Seacord - NDC TechTown 2022_ by Robert C. Seacord @ youtube.com 2022](https://www.youtube.com/watch?v=Fa8qcOd18Hc)
-
+- 35: [_Unsigned vs. signed integer arithmetic_ by Daniel Lemire @ lemire.me 2017](https://lemire.me/blog/2017/05/29/unsigned-vs-signed-integer-arithmetic/)
+- 36: [_SEI CERT C++ Coding Standard_ > _CTR50-CPP. Guarantee that container indices and iterators are within the valid range_ by Justin Picar, Jill Britton @ wiki.sei.cmu.edu/ 2023](https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR50-CPP.+Guarantee+that+container+indices+and+iterators+are+within+the+valid+range)
+- 37: [_SEI Cert C Coding Standard_ > _INT30-C. Ensure that unsigned integer operations do not wrap_ by Robert Seacord, Michal Rozenau 2023](https://wiki.sei.cmu.edu/confluence/display/c/INT30-C.+Ensure+that+unsigned+integer+operations+do+not+wrap)
+- 38: [_Firefox 2.0 SVG "_cairo_pen_init" Heap Overflow_ by tommy @ bugzilla.mozilla.org 2006](https://bugzilla.mozilla.org/show_bug.cgi?id=360645)
 
