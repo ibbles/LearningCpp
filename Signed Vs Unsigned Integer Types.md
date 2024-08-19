@@ -172,10 +172,10 @@ void work(std::ptrdiff_t v1, std::ptrdiff_t v2)
 )
 
 
-The purpose of this note is to evaluate the advantages and disadvantages of using signed or unsigned integers,
-mainly for indexing operations.
+The purpose of this note is to evaluate the advantages and disadvantages of using signed or unsigned integers, mainly for indexing operations.
 Both variants work and all problematic code snippets can be fixed using either type.
 They are what multiple authors and commentators could call "bad code, bad programmer".
+But both families of types have problem areas and errors can occur with both [(34)](https://youtu.be/Fa8qcOd18Hc?t=3080).
 The aim has been to find examples where the straight-forward way to write something produces unexpected and incorrect behavior.
 If what the code says, or at least implies after a quick glance, isn't what the code does then there is a deeper problem than just "bad code, bad programmer".
 Real-world programmers writing real-world programs tend to have other concerns in mind than the minutiae of integer implicit conversion rules and overflow semantics.
@@ -1169,8 +1169,8 @@ For example it can assume that `index + 1` is greater than `index` and that `con
 This is not true for unsigned types since both `- 1` and `+ 1` can cause the value to wrap around.
 This can make auto-vectorization more difficult [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
 
-With signed integers the compiler can simplify `10 * k / 2` to `5 * k`,
-this is not possible with unsigned since the `10 * k` part can wrap.
+With signed integers the compiler can simplify `10 * k / 2` to `5 * k`.
+This is not possible with unsigned since the `10 * k` part can wrap.
 
 Loops with fixed but unknown number of iterations can be optimized better with signed integers [(16)](https://www.youtube.com/watch?v=g7entxbQOCc).
 
@@ -1196,6 +1196,8 @@ void work(Container& container, std::ptrdiff_t end)
 	}
 }
 ```
+The programmer can do this transformation itself when using unsigned integer, e.g. instead of using` std::uint32_t` use `std::uint64_t` on a 64-bit machine, or `std::size_t` to work on "any" machine [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
+("any"in quotes because there may be machines where `std::size_t` is different from the native arithmetic type. You may consider using one of the `std::uint_fast*_t` types.)
 
 Though there are some cases where unsigned provides better optimization opportunities.
 For example division [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
@@ -1591,16 +1593,16 @@ since the other end is built into the type.
 With a signed type, since it can contain negative values, we must also check the lower end of the range, i.e. 0.
 
 ```cpp
-// Signed index.
-if (index < 0 || index >= container.size())
-	return false;
-
 // Unsigned index.
 if (index >= container.size())
 	return false;
+
+// Signed index.
+if (index < 0 || index >= container.size())
+	return false;
 ```
 
-A suggestion [(21)](https://internals.rust-lang.org/t/subscripts-and-sizes-should-be-signed/17699) to test signed integers with a  single comparison is to cast it to unsigned.
+A suggestion [(21)](https://internals.rust-lang.org/t/subscripts-and-sizes-should-be-signed/17699) to test signed integers with a single comparison is to cast it to unsigned.
 
 ```cpp
 if (static_cast<std::size_t>(index) >= container.size())
@@ -1612,7 +1614,6 @@ probably larger than the container size.
 This only works if the index isn't more negative than the size of the container.
 This means that if we want to be guaranteed that this trick works then we may never create a container larger than half the range of the unsigned type.
 Which is true for e.g. `std::vector`.
-
 
 Another option is to wrap the index in a type that expresses the restriction while still retaining signed arithmetic.
 The type can provide useful helper functions.
@@ -1648,6 +1649,7 @@ struct Positive
 	}
 }
 ```
+
 
 ## Small Index Calculation Errors Causes Misbehaving Programs
 
@@ -1688,6 +1690,8 @@ if ((b > 0 && a > INT_MAX - b) || (b < 0 && a < INT_MIN - b))
 // Check for subtraction overflow, i.e a - b.
 if ((b > 0 && a < INT_MIN + b) || (b < 0 && a > INT_MAX + b))
 ```
+
+Injecting undefined behavior into a program doesn't make it safer or more secure[(34)](https://youtu.be/Fa8qcOd18Hc?t=3110).
 
 ## Must Use A Larger Type To Store Unsigned Input
 
@@ -1744,6 +1748,15 @@ Clang and GCC have `__int128` with limited library support.
 I don't know of any MSVC extension for an 128 bit integer type.
 )
 
+## Safe Arithmetic Takes More Instructions
+
+By "safe" I mean guaranteed to have produced the mathematical result,
+the result we would have gotten with infinite precision, otherwise we are give a false return or similar.
+It is easier to check for unsigned wrap around than signed overflow.
+With signed integers safe addition requires up to three of branches and an extra subtraction.
+With unsigned it is a single add instruction and a read from the status flags registry [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc?t=2910).
+Similar for other operators as well.
+
 ## The Modulus Operator Behavior Can Be Unexpected For Negative Numbers
 
 A common way to detect odd numbers is `n % 2 == 1`.
@@ -1767,6 +1780,14 @@ There are other ways to communicate that a result could not be produced:
 - `std::optional`.
 - `std::expected`.
 - Assert.
+
+## More Operators With Problematic Semantics
+
+Given a listing of all operators on signed and unsigned integers a larger fraction of can produce undefined behavior when operating on signed integers compared to the fraction of operators that can produce wrap around when operating on unsigned integers [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc?t=2643).
+There are more things that can go wrong with them.
+This is because when using two's complement representation of signed integers we have one more negative number than we have positive ones.
+We can't negate the most negative value because there is no corresponding positive value.
+The same is true for dividing by or taking the remainder of that number and -1.
 
 # Recommendations
 
