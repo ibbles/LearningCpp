@@ -719,12 +719,6 @@ Another recommendation is to always use signed even in this case.
 
 Using unsigned is a natural choice when working with non-negative quantities such as indices and counts [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [25](https://graphitemaster.github.io/aau/).
 
-## The Type Used By Real Programmers
-
-Unsigned unsigned integers is absolutely safe if you know what you are doing and make no mistakes [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
-If you get burned by any of the pitfalls associated with using unsigned integers then you are a bad programmer [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
-Good tools create weak programmers, programming should be tough [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
-
 ## Makes Invalid Values Unrepresentable
 
 Restricting what values can be passed to a function through the type system is a good way to communicate how the function is meant to be used to both programmers and the compiler.
@@ -802,10 +796,14 @@ Another counter-point is that by making under- and overflow undefined behavior w
 If an application occasionally miscalculates an index to be negative that might not be noticed if using signed integer for indexing other than difficult-to-diagnose bugs.
 With unsigned integers for indexing the negative value becomes a very large value and likely a segmentation fault on the first use.
 
-## Bit With Conversions Cheaper
+## Bit Width Conversions Cheaper
 
 If you mix values with different bit width then unsigned is more efficient because the conversion is a no-op.
 With signed values one must perform sign extension when going from e.g. 32-bit to 64-bit [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post19).
+(
+Does this really matter?
+I would like to see 
+)
 
 On the other hand, with signed values the compiler may not need to do any conversion at all.
 In some cases it can transform the code to use the target type form the start [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post23).
@@ -817,6 +815,14 @@ See _Advantages Of Signed_ > _More Opportunities For Compiler Optimizations_.
 
 I'm not sure this is true.
 [Link](https://www.reddit.com/r/cpp_questions/comments/1ej5mo0/comment/lgcbrh0/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button).
+
+## The Type Used By Real Programmers
+
+Unsigned unsigned integers is absolutely safe if you know what you are doing and make no mistakes [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
+If you get burned by any of the pitfalls associated with using unsigned integers then you are a bad programmer [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
+Good tools create weak programmers, programming should be tough [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
+It is what God intended [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
+
 
 # Advantages Of Signed
 
@@ -831,7 +837,7 @@ Using the type that is more similar to our intuition of how numbers work makes i
 
 Small negative numbers are more common than very large positive numbers.
 
-Mixing signed and unsigned numbers adds even more surprising behavior.
+Mixing signed and unsigned numbers adds even more surprising behavior [(41)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf).
 
 ## Can Detect Unintended Negative Values
 
@@ -1093,7 +1099,7 @@ We may want the check in some parts of the code but not others.
 
 ## Less Mixing Of Signed And Unsigned
 
-One source of bugs is when signed and unsigned values are mixed in an expression [(7)](https://google.github.io/styleguide/cppguide.html#Integer_Types), [(12)](https://www.sandordargo.com/blog/2023/10/11/cpp20-intcmp-utilities), [(15)](https://youtu.be/Puio5dly9N8?t=2561).
+One source of bugs is when signed and unsigned values are mixed in an expression [(7)](https://google.github.io/styleguide/cppguide.html#Integer_Types), [(12)](https://www.sandordargo.com/blog/2023/10/11/cpp20-intcmp-utilities), [(15)](https://youtu.be/Puio5dly9N8?t=2561), [(41)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf).
 This leads to implicit conversions and results that are difficult to predict for many programmers.
 Assuming we are required to use signed values for some variables, some data is inherently signed [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), it follows that we want to also use a singed type for any value that is used together with the inherently signed data.
 This process repeats and a front of the signed-ness spreads like a virus across the code base until everything, or at least most things, are signed.
@@ -1233,6 +1239,7 @@ Martin Beeger summarizes the mixing issue well  [(14)](https://eigen.tuxfamily.n
 > integer promotion and comparision, which is exactly what we should IMHO
 > protect users from.
 
+Some of the issues described above can be avoided by using the `cmp_*` family of functions [intcmp @ en.cppreference.com](https://en.cppreference.com/w/cpp/utility/intcmp).
 
 ## Mostly Safe Conversions To Unsigned
 
@@ -1392,11 +1399,17 @@ Can have surprising conversions to/from signed integers, see _Advantages Of Sign
 Such as `unsigned_value >= 0` [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 For example
 ```cpp
-for (std::size_t i = container.size(); i >= 0; --i) { /* Do stuff. */
+for (std::size_t i = container.size(); i >= 0; --i)
+{
+	/* Do stuff. */
+}
 ```
 
 This is not illegal per the language, this code should compile without error.
 You may get a warning, but that is just the compiler trying to be helpful.
+
+When working with unsigned integers, the index range has to set such that the index never tries to be decremented past 0 [(43)](https://www.cppstories.com/2022/ssize-cpp20/).
+It takes effort to guarantee this, and precludes seemingly "obviously correct" / "natural" implementations.
 
 See also _Advantages Of Signed_ > _Backwards Loops Easier To Write_.
 
@@ -1649,7 +1662,7 @@ A drawback of this approach is that in many cases we don't want wrap around and 
 ## Difficult To Interact With The Standard Library
 
 The standard library uses unsigned integer types for many things, in particular `size_t size() const` and `T& operator[](size_t index)`.
-This makes working with the standard library with `integer_t` being signed difficult since we are forced to mix signed and unsigned values in expressions and get sign-conversion warnings all over the place if `-Wsign-conversion` is enabled,
+This makes working with the standard library with `integer_t` being signed difficult since we are forced to mix signed and unsigned values in expressions and get sign-conversion warnings all over the place if `-Wsign-conversion` is enabled [(41)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf),
 or explicitly cast our index variables from signed to unsigned on every container access.
 This creates verbose, noisy, and difficult to read code, and we risk incorrect behavior if we ever encounter a `std::size_t`  value larger than `std::numeric_limits<std::ptrdiff_t>::max()` [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc)****.
 It is unclear how such a case should be handled.
@@ -2029,7 +2042,13 @@ I should make a list here.
 - 33: [_Signed vs. unsigned integers for lengths/counts_ by user1149224 et.al @ stackoverflow.com 2012](https://stackoverflow.com/questions/10040884/signed-vs-unsigned-integers-for-lengths-counts)
 - 34: [_Signed Integers Considered Harmful - Robert Seacord - NDC TechTown 2022_ by Robert C. Seacord @ youtube.com 2022](https://www.youtube.com/watch?v=Fa8qcOd18Hc)
 - 35: [_Unsigned vs. signed integer arithmetic_ by Daniel Lemire @ lemire.me 2017](https://lemire.me/blog/2017/05/29/unsigned-vs-signed-integer-arithmetic/)
-- 36: [_SEI CERT C++ Coding Standard_ > _CTR50-CPP. Guarantee that container indices and iterators are within the valid range_ by Justin Picar, Jill Britton @ wiki.sei.cmu.edu/ 2023](https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR50-CPP.+Guarantee+that+container+indices+and+iterators+are+within+the+valid+range)
-- 37: [_SEI Cert C Coding Standard_ > _INT30-C. Ensure that unsigned integer operations do not wrap_ by Robert Seacord, Michal Rozenau 2023](https://wiki.sei.cmu.edu/confluence/display/c/INT30-C.+Ensure+that+unsigned+integer+operations+do+not+wrap)
+- 36: [_SEI CERT C++ Coding Standard_ > _CTR50-CPP. Guarantee that container indices and iterators are within the valid range_ by Justin Picar, Jill Britton @ sei.cmu.edu 2023](https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR50-CPP.+Guarantee+that+container+indices+and+iterators+are+within+the+valid+range)
+- 37: [_SEI Cert C Coding Standard_ > _INT30-C. Ensure that unsigned integer operations do not wrap_ by Robert Seacord, Michal Rozenau @ sei.cmu.edu 2023](https://wiki.sei.cmu.edu/confluence/display/c/INT30-C.+Ensure+that+unsigned+integer+operations+do+not+wrap)
 - 38: [_Firefox 2.0 SVG "_cairo_pen_init" Heap Overflow_ by tommy @ bugzilla.mozilla.org 2006](https://bugzilla.mozilla.org/show_bug.cgi?id=360645)
-
+- 39: [_SEI CERT C Coding Standard_ > _INT01-C. Use rsize_t or size_t for all integer values representing the size of an object_ by Rober C. Seacord, David Svoboda @ sei.cmu.edu 2023](https://wiki.sei.cmu.edu/confluence/display/c/INT01-C.+Use+rsize_t+or+size_t+for+all+integer+values+representing+the+size+of+an+object)
+- 40: [_P1227: Signed ssize() functions, unsigned size() functions (Revision 2)_ by Jorg Brown @ open-std.org 2019](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1227r2.html)
+- 41 [_Sizes Should Only span Unsigned_ by Robert Douglas, Nevin Liber, Marshall Clow @ open-std.org 2018](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf)
+- 42:  [_N1967: Field Experience With Annex K - Bounds Checking Interfaces_ by Carlos O'Donell, Martin Sebor @ open-std.org 2015](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1967.htm)
+- 43: [_Reducing Signed and Unsigned Mismatches with std::ssize()_ by Bartlomiej Filipek @ cppstories.com 2022](https://www.cppstories.com/2022/ssize-cpp20/)
+- 44: [_Unsigned int considered harmful for Java_ by Nayuki @ nayuki.io 2018](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java)
+- 
