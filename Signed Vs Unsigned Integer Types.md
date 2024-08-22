@@ -1,5 +1,12 @@
 (
 TODO
+Consider structuring the note as a sequence or functions to implement and ways of implementing it.
+Then compare which work with signed and which work with unsigned.
+If more examples don't work with either type then that type is more error-prone.
+)
+
+(
+TODO
 Rewrite the sectioning to not be pros/cons signed/unsigned since there is too much repetition.
 Instead describe one use-case / concept at the time and evaluate the consequences with signed and unsigned integers together.
 This makes it easier to place considerations that doesn't fit neatly into a pro or con for either of them, such as the `auto mid = (low + high) / 2`  discussion in [25](https://graphitemaster.github.io/aau#computing-indices-with-signed-arithmetic-is-safer), and others in the same text.
@@ -1656,6 +1663,20 @@ void work(Container& container)
 This works for unsigned loop counters but not for signed loop counters since after 0 they would step to -1, which is not a valid index.
 A drawback of this approach is that in many cases we don't want wrap around and may run our program with `-fsanitize=unsigned-integer-overflow`, and that would trigger on this (indented) wrap-around.
 
+# Forced To Mix Signed And Unsigned
+
+Some data is inherently signed.
+Sometimes we need to use such data to compute indices or sizes (citation needed).
+By making the container interface unsigned we force unsigned values upon the user,
+we make the decision for them.
+
+Is this more of a problem than the opposite? Forcing signed values upon the user?
+It is if the range of the signed type can be assumed to be large enough.
+All not-too-large unsigned values can be represented in a signed value.
+The conversion is safe.
+The same is not true for signed to unsigned.
+There are many reasonable sized negative values that cannot be represented by an unsigned type.
+
 
 # Disadvantages Of Signed
 
@@ -1737,6 +1758,7 @@ for example [_Learn C++_ > _16.7 — Arrays, loops, and sign challenge solutions
 Since unsigned integers cannot be negative there is no need to test whether a given index is less than zero.
 So it is enough to test the index against one end of the range,
 since the other end is built into the type.
+With unsigned, the set of invalid indices consists of only one kind: too large indices [(21)](https://internals.rust-lang.org/t/subscripts-and-sizes-should-be-signed/17699/42).
 
 With a signed type, since it can contain negative values, we must also check the lower end of the range, i.e. 0 [(36)](https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR50-CPP.+Guarantee+that+container+indices+and+iterators+are+within+the+valid+range).
 
@@ -1904,6 +1926,12 @@ It is easier to check for unsigned wrap around than signed overflow.
 With signed integers safe addition requires up to three of branches and an extra subtraction.
 With unsigned it is a single add instruction and a read from the status flags registry [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc?t=2910).
 Similar for other operators as well.
+
+## Using Signed Return Values Is Misleading
+
+Having a signed return value signals that one should expect negative values to be returned.
+In scenarios where only positive values are expected the user may be confused as to during what circumstances the return value could be negative.
+Maybe the documentation explains the situation, but maybe it doesn't.
 
 ## The Modulus Operator Behavior Can Be Unexpected For Negative Numbers
 
