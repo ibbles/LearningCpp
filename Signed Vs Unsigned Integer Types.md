@@ -752,7 +752,7 @@ For consistency, we should also use `std::size_t` for other sizes, such as the n
 
 ## Larger Positive Range
 
-An unsigned integer can address twice as many container elements as an equally-sized signed integer can [(33)](https://stackoverflow.com/questions/10040884/signed-vs-unsigned-integers-for-lengths-counts).
+An unsigned integer can address twice as many container elements as an equally-sized signed integer can [(33)](https://stackoverflow.com/questions/10040884/signed-vs-unsigned-integers-for-lengths-counts), [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java).
 If you don't need a sign then don't spend a bit on it.
 When no negative numbers are required, unsigned integers are well-suited for networking and systems with little memory, because unsigned integers can store more positive numbers without taking up extra memory.
 This may be important when the index type is small [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [(18)](https://softwareengineering.stackexchange.com/questions/338088/size-t-or-int-for-dimensions-index-etc), such as 16 or possibly even 32-bit in some cases.
@@ -770,7 +770,7 @@ At least [GCC's standard library implementation of `vector` is limited](https://
 
 ## Single-Comparison Range Checks
 
-Only need to check one side of the range for indexing [(36)](https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR50-CPP.+Guarantee+that+container+indices+and+iterators+are+within+the+valid+range).
+Only need to check one side of the range for indexing [(36)](https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR50-CPP.+Guarantee+that+container+indices+and+iterators+are+within+the+valid+range), [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java).
 
 ```cpp
 // Unsigned index.
@@ -1171,7 +1171,7 @@ One place where the type is not visible is in functions calls.
 At the call site we cannot see the type of the parameter.
 This means that we can unknowingly pass a signed integer that is implicitly converted to an unsigned one.
 It is is difficult for the called function to detect if large positive values are also valid use cases.
-We can chose to enable compiler warnings for this, e.g. `-Wsign-conversion`, but some advocates for using signed integers advice against enabling this warning in order to make interacting with the standard library easier.
+We can chose to enable compiler warnings for this, e.g. `-Wsign-conversion`, but some advocates for using signed integers advice against enabling this warning in order to make interacting with the standard library easier [(5)](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es107-dont-use-unsigned-for-subscripts-prefer-gslindex).
 They want to following code, where `container[index]` contains an implicit signed → unsigned conversion, to be warning-free:
 ```cpp
 void work(Container& container)
@@ -1182,6 +1182,21 @@ void work(Container& container)
 	}
 }
 ```
+
+While the above loop is safe, `container.size()` can never be larger than `std::numeric_limits<ptrdiff_t>::max()`, the same is not true for other loop counter types.
+For example, the following may lead to integer overflow and undefined behavior [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java).
+```cpp
+void work(Container& container)
+{
+	for (int index = 0; index < container.size(); ++index)
+	{
+		// Work with container[index].
+	}
+}
+```
+The implicit conversion rules may "save" us in practice here, depending on what the compiler chooses to do.
+An `int OP size_t` expression converts the signed `int` to an unsigned `size_t` which means that the wrap-arounded -1 `int` value is turned into an unsigned value, 2147483648, and then expanded to the width of `size_t`.
+Assuming the container isn't larger than `std::numeric_limits<unsigned int>::max()`, eventually the unsignified negative `int` reaches the last element of the container and the loop stops.
 
 Negative values often appear from subtractions and it can be non-obvious that the left hand side may be smaller than the right hand side [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf).
 ```cpp
@@ -1250,8 +1265,12 @@ Some of the issues described above can be avoided by using the `cmp_*` family of
 
 ## Mostly Safe Conversions To Unsigned
 
-It is usually safe to pass a signed integer value in a call to a function taking an unsigned integer parameter.
+It is usually safe to pass a signed integer value in a call to a function taking an unsigned integer parameter [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java).
 This includes `operator[]` in the standard library containers.
+For example, a 64-bit signed integer type can represent all 63-bit unsigned integer values.
+It is only when the 64th bit in an unsigned value is set that we get problems.
+If we have a sufficiently large signed type then we don't need unsigned ones.
+Unsigned and signed types are both useful, but signed types have strictly more functionality than unsigned types.
 We need to ensure that the value is in range of the container, but that is true regardless.
 We can enable warnings for when we do this if we want, `-Wsign-conversion`, but we can also chose not to enable those and just let the conversion happen.
 
@@ -1403,7 +1422,7 @@ Can have surprising conversions to/from signed integers, see _Advantages Of Sign
 
 ## Easy To Accidentally Write Conditions That Are Always True Or Always False
 
-Such as `unsigned_value >= 0` [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
+Such as `unsigned_value >= 0` [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc) or the opposite `unsigned_value < 0` [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java).
 For example
 ```cpp
 for (std::size_t i = container.size(); i >= 0; --i)
@@ -1417,6 +1436,8 @@ You may get a warning, but that is just the compiler trying to be helpful.
 
 When working with unsigned integers, the index range has to set such that the index never tries to be decremented past 0 [(43)](https://www.cppstories.com/2022/ssize-cpp20/).
 It takes effort to guarantee this, and precludes seemingly "obviously correct" / "natural" implementations.
+
+The prevalence of such errors shows that real-world programmers often make mistakes distinguishing signed and unsigned integer types [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java).
 
 See also _Advantages Of Signed_ > _Backwards Loops Easier To Write_.
 
@@ -1663,7 +1684,7 @@ void work(Container& container)
 This works for unsigned loop counters but not for signed loop counters since after 0 they would step to -1, which is not a valid index.
 A drawback of this approach is that in many cases we don't want wrap around and may run our program with `-fsanitize=unsigned-integer-overflow`, and that would trigger on this (indented) wrap-around.
 
-# Forced To Mix Signed And Unsigned
+## Forced To Mix Signed And Unsigned
 
 Some data is inherently signed.
 Sometimes we need to use such data to compute indices or sizes (citation needed).
@@ -1755,9 +1776,8 @@ for example [_Learn C++_ > _16.7 — Arrays, loops, and sign challenge solutions
 
 ## Require Two Comparisons For Range Checks
 
-Since unsigned integers cannot be negative there is no need to test whether a given index is less than zero.
-So it is enough to test the index against one end of the range,
-since the other end is built into the type.
+Since unsigned integers cannot be negative there is no need to test whether a given unsigned index is less than zero.
+So it is enough to test the index against one end of the range, since the other end is built into the type.
 With unsigned, the set of invalid indices consists of only one kind: too large indices [(21)](https://internals.rust-lang.org/t/subscripts-and-sizes-should-be-signed/17699/42).
 
 With a signed type, since it can contain negative values, we must also check the lower end of the range, i.e. 0 [(36)](https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR50-CPP.+Guarantee+that+container+indices+and+iterators+are+within+the+valid+range).
@@ -1772,6 +1792,9 @@ if (index < 0 || index >= container.size())
 	return false;
 ```
 
+Fewer comparisons are not worth the huge risk of the programmer doing mixed-type arithmetic/comparisons/conversions incorrectly.
+It’s better to be just a little more verbose than to have subtle bugs hiding implicitly in the code [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java).
+
 A suggestion [(21)](https://internals.rust-lang.org/t/subscripts-and-sizes-should-be-signed/17699) to test signed integers with a single comparison is to cast it to unsigned.
 
 ```cpp
@@ -1783,7 +1806,7 @@ This will wrap moderately sized negative values to very large positive values,
 probably larger than the container size.
 This only works if the index isn't more negative than the size of the container.
 This means that if we want to be guaranteed that this trick works then we may never create a container larger than half the range of the unsigned type.
-Which is true for e.g. `std::vector`.
+Which is true for e.g. `std::vector` and `std::ptrdiff_t`.
 
 Another option is to wrap the index in a type that expresses the restriction while still retaining signed arithmetic.
 The type can provide useful helper functions.
@@ -2079,4 +2102,4 @@ I should make a list here.
 - 42:  [_N1967: Field Experience With Annex K - Bounds Checking Interfaces_ by Carlos O'Donell, Martin Sebor @ open-std.org 2015](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1967.htm)
 - 43: [_Reducing Signed and Unsigned Mismatches with std::ssize()_ by Bartlomiej Filipek @ cppstories.com 2022](https://www.cppstories.com/2022/ssize-cpp20/)
 - 44: [_Unsigned int considered harmful for Java_ by Nayuki @ nayuki.io 2018](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java)
-- 
+
