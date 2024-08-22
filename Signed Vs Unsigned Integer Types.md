@@ -1067,8 +1067,8 @@ The computation of `i * stride` produces a very large number that would be almos
 
 In some cases the index computation may produce intermediate negative values.
 This is OK as long as we ultimately end up with a positive value being passed to `operator[]`.
-This works with unsigned integers as long as the computation only involves operations that work as intended under modular arithmetic, additions and subtractions.
-(Does multiplication work as well?)
+This works with unsigned integers as long as the computation only involves operations that work as intended under modular arithmetic, e.g. additions, subtractions and multiplications [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java).
+Not division and reminder.
 The modular arithmetic ensures that the correct number of steps is taken in both directions regardless of any wrapping at either side.
 It may make debugging more difficult since printing values won't show the "semantically correct" value but instead the wrapped value.
 However, if we do divides on a supposedly negative, but actually very large, values then we will get an incorrect result.
@@ -1166,6 +1166,21 @@ void work(
 ```
 
 The if statement condition is essentially the same as the common `index < container.size()` that we know to be weary of when `index` is a signed integer, but the problem is easier to miss since the pattern is unfamiliar.
+
+Because of the implicit conversion rules unsigned values tend to contaminate the arithmetic in mixed signed/unsigned expressions [(45)](https://stackoverflow.com/a/18795564).
+```cpp
+void work(Container& container, std::ptrdiff_t a, std::ptrdiff_t b)
+{
+	if (container.size() - (a + b) >= 0)
+	{
+		// a + b seems to be smaller than the container size.
+		// All variables we declared are signed because we want
+		// signed arithmetic.  However, because the size_t from
+		// size()tainted the expression we end up with an unsigned
+		// value and a tautology conditional.
+	}
+}
+```
 
 One place where the type is not visible is in functions calls.
 At the call site we cannot see the type of the parameter.
@@ -1434,8 +1449,62 @@ for (std::size_t i = container.size(); i >= 0; --i)
 This is not illegal per the language, this code should compile without error.
 You may get a warning, but that is just the compiler trying to be helpful.
 
+The value compared with an unsigned integer might not itself be an unsigned integer.
+The implicit conversion rules will, in many cases, convert a signed value to unsigned and wreck the comparison for us [(45)](https://stackoverflow.com/a/18795564).
+Unsigned values have a tendency to contaminate arithmetic and spread like a virus in mixed signed/unsigned expressions.
+```cpp
+void work(Container& container, std::ptrdiff_t a, std::ptrdiff_t b)
+{
+	if (container.size() - (a + b) >= 0)
+	{
+		// a + b seems to be smaller than the container size.
+		// All variables we declared are signed because we want
+		// signed arithmetic.  However, because the size_t from
+		// size()tainted the expression we end up with an unsigned
+		// value and a tautology conditional.
+	}
+}
+```
+
 When working with unsigned integers, the index range has to set such that the index never tries to be decremented past 0 [(43)](https://www.cppstories.com/2022/ssize-cpp20/).
 It takes effort to guarantee this, and precludes seemingly "obviously correct" / "natural" implementations.
+
+Another error case is the following [(45)](https://stackoverflow.com/a/18795746):
+```cpp
+void work(Container& container)
+{
+	for (std::size_t index = 0; index < container.size(); ++index)
+	{
+		// Special handling for the first few elements.
+		if (index - 3 < 0)
+		{
+			// Will never get here.
+		}
+
+		// A better, and arguably more natural, way to write it.
+		if (index < 3)
+		{
+		}
+}
+```
+
+A less obvious variant:
+```cpp
+void work(
+	Container& container,
+	std::size_t kernel_center,
+	std::size_t kernel_width)
+{
+	for (std::size_t index = 0; index < container.size(); ++index)
+	{
+		if (kernel_center - index < kernel_width)
+		{
+			// This element is covered by the kernel.
+		}
+	}
+}
+```
+
 
 The prevalence of such errors shows that real-world programmers often make mistakes distinguishing signed and unsigned integer types [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java).
 
@@ -1683,6 +1752,24 @@ void work(Container& container)
 
 This works for unsigned loop counters but not for signed loop counters since after 0 they would step to -1, which is not a valid index.
 A drawback of this approach is that in many cases we don't want wrap around and may run our program with `-fsanitize=unsigned-integer-overflow`, and that would trigger on this (indented) wrap-around.
+
+Another variant that works for single-step backwards loops is the following.
+```cpp
+void work(Container& container)
+{
+	for (std::size_t index = container.size(); index--; /* empty */)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+The loop variables is updated in the conditional using a post decrement.
+This means that when `index` is 1 at the start of the conditional it evaluates to true and we enter the loop, but before that `index` is decremented to 0.
+On the first iteration we initialize `index` to the one-past-end index, i.e. `size()`, but before we enter the loop body the first time `index` has been decremented to the last valid index.
+If there is no valid index, i.e. the container is empty, then `index` is initialized to zero, used in the conditional evaluated as false, and then decremented and wrapped to some very large values.
+But that's OK since we never enter the loop body.
+The invalid index is never used.
 
 ## Forced To Mix Signed And Unsigned
 
@@ -2102,4 +2189,5 @@ I should make a list here.
 - 42:  [_N1967: Field Experience With Annex K - Bounds Checking Interfaces_ by Carlos O'Donell, Martin Sebor @ open-std.org 2015](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1967.htm)
 - 43: [_Reducing Signed and Unsigned Mismatches with std::ssize()_ by Bartlomiej Filipek @ cppstories.com 2022](https://www.cppstories.com/2022/ssize-cpp20/)
 - 44: [_Unsigned int considered harmful for Java_ by Nayuki @ nayuki.io 2018](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java)
+- 45: [_Why prefer signed over unsigned in C++_ by Mordachai et.al @ stackoverflow.com 2013](https://stackoverflow.com/questions/18795453/why-prefer-signed-over-unsigned-in-c)
 
