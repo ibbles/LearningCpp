@@ -293,6 +293,9 @@ A problem is that signed and unsigned expresses multiple properties and it is no
 - Unexpected or unintended wrapping.
 - Comparing signed and unsigned.
 
+When we say that some arithmetic operation produced an unexpected result we don't mean that it is unexpected that fixed-width integers wrap at the ends of  the type's range,
+we mean that it was unexpected that this particular operation reached that end.
+
 
 # Operations
 
@@ -1096,17 +1099,22 @@ It won't be the value you wanted, but at least it will be legal and under-/overf
 
 ## Tools Can Report Underflow And Overflow
 
-Tools, such as sanitizers, can report underflow and underflow on signed arithmetic operations.
-In most cases the user did not intend for the operation to under- or overflow.
-Tools cannot do this for unsigned operations in general since the behavior is defined in those cases, it is not an error.
+Tools, such as sanitizers, can report underflow and underflow on signed arithmetic operations [(45)](https://stackoverflow.com/a/18796084).
+In most cases the user did not intend for the operation to under- or overflow,
+and even if if was intended it is undefined behavior and should not be relied upon.
+Tools cannot (while strictly following the standard, but see below) do this for unsigned operations in general since the behavior is defined in those cases, it is not an error.
 
 I imagine we can have tools that can be configured to report unsigned wrapping if we want to,
+such as `fsanitize=unsigned-integer-overflow`,
 but since there are cases where we actually want wrapping this is not something that can be done in general.
 We may want the check in some parts of the code but not others.
 
+The real world is not as neat as some language lawyers would like to believe.
+There is `-fwrapv`, (I had something more in mind to write here.).
+
 ## Less Mixing Of Signed And Unsigned
 
-One source of bugs is when signed and unsigned values are mixed in an expression [(7)](https://google.github.io/styleguide/cppguide.html#Integer_Types), [(12)](https://www.sandordargo.com/blog/2023/10/11/cpp20-intcmp-utilities), [(15)](https://youtu.be/Puio5dly9N8?t=2561), [(41)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf).
+One source of bugs is when signed and unsigned values are mixed in an expression [(7)](https://google.github.io/styleguide/cppguide.html#Integer_Types), [(12)](https://www.sandordargo.com/blog/2023/10/11/cpp20-intcmp-utilities), [(15)](https://youtu.be/Puio5dly9N8?t=2561), [(41)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf). [(45)](https://stackoverflow.com/a/18796546).
 This leads to implicit conversions and results that are difficult to predict for many programmers.
 Assuming we are required to use signed values for some variables, some data is inherently signed [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), it follows that we want to also use a singed type for any value that is used together with the inherently signed data.
 This process repeats and a front of the signed-ness spreads like a virus across the code base until everything, or at least most things, are signed.
@@ -1386,6 +1394,42 @@ Though there are some cases where unsigned provides better optimization opportun
 For example division [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
 
 
+### There is an x86-64 Instruction For Converting A Signed Integer To Floating-Point
+
+Consider a typical average calculation:
+```cpp
+template <typename T>
+double average(Container<T>& container)
+{
+	T sum {0};
+	const integer_t num_elements = container.size();
+	for (integer _t index = 0; index < num_elements; ++index)
+	{
+		sum += container[index];
+	}
+	return static_cast<double>(sum) / static_cast<double>(num_elements);
+}
+```
+
+When `integer_t` is a signed integer type the compiler can use the `cvtsi2sd` instruction to convert `num_elements` to a floating-point number.
+When `integer_t` is unsigned it takes more work, here converting the integer in `rsi` to a floating-point value in `xmm2`:
+```S
+movq      %rsi, %xmm1
+punpckldq .LCPI12_0(%rip), %xmm1
+subpd     .LCPI12_1(%rip), %xmm1
+movapd    %xmm1, %xmm2
+unpckhpd  %xmm1, %xmm2
+addsd     %xmm1, %xmm2
+```
+
+`.LCPI12_0` `.LCPI12_1` are a pair of constants describing the bit layout of the floating point type.
+I have no idea if this has any impact on real-world performance or not.
+If we want to avoid the potentially more costly conversion and are allowed to assume that `num_elements` can never be larger than `std::numeric_limits<std::ptrdiff_t>::max()` , for example if we are using `std::vector`, then we can cast it first:
+```cpp
+return /* as before */ / static_cast<double>(static_cast<std::ptrdiff_t>(num_elements));
+```
+
+### /
 
 (
 TODO List cases where this leads to a measurable performance improvement.
@@ -1431,7 +1475,11 @@ Either with an output parameter, returning a tuple or a struct, returning an opt
 
 ## Unsigned Integer Does Not Model Natural Numbers
 
-They model modular arithmetic.[(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf)
+They model modular arithmetic [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [(45)](https://stackoverflow.com/a/18796084)
+Decreasing an unsigned value doesn't necessarily make it smaller [(45)](https://stackoverflow.com/a/18795568).
+This is true for both signed and unsigned integers, but for signed integers the point where that happens far away from commonly used numbers while for unsigned integers it is right next to the most common number: 0.
+This helps for some applications, but not if you have high requirements on correctness, safety, and security. 
+See also _Advantages Of Signed_ > _Underflow Is Farther Away From Common Numbers_.
 Can have surprising conversions to/from signed integers, see _Advantages Of Signed_ > _Less Mixing Of Signed And Unsigned_.
 
 
