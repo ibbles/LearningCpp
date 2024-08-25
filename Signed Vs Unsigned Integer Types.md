@@ -1125,7 +1125,7 @@ This means that a similar front of unsigned-ness spreads in the opposite directi
 Trouble and headaches happen where these fronts meet.
 Unless we chose to use a different set of containers that use a signed integer type instead.
 
-A goal should be to keep this front-of-mixed-signed-ness as small as possible.
+A goal should be to keep this front of mixed signed-ness as small and manageable as possible.
 
 Since we cannot, in many applications, avoid negative, and thus signed, integers it is not unreasonable to confine the unsigned types as much as possible.
 As soon as we are given an unsigned value we check that it isn't too large and then cast it to signed.
@@ -1137,6 +1137,17 @@ Trying to force everything to the same signedness is a false sense of security.
 A counter-point to that is that as programmers we absolutely do not want to discard whatever we currently have in our own working memory, for example while debugging, to start analyzing the impacts of possible implicit conversions, sign extensions, and wrapping behavior.
 We want code to do what it looks like the code is doing.
 We cannot memorize an ever-growing number of tricks and idioms to make loops using unsigned counters work correctly in all edge and corner cases.
+
+One reason for why mixing signed and unsigned integers in C++ is because of unfortunate implicit conversion rules [(46)](https://stackoverflow.com/a/18248537).
+Consider
+- `unsigned - unsigned` which produces an unsigned result, and
+- `signed + unsigned` which also produces an unsigned result (except if the signed integer type has higher range than the unsigned type).
+
+If we take "unsigned" to mean "cannot be negative", i.e. "is positive", we can write
+`positive - positive is positive` and `signed + unsigned is unsigned`.
+Both of these are logically false.
+Subtracting two positive values can produce a negative value,
+and adding a positive value to a negative value may result in another negative value.
 
 Example error case:
 ```cpp
@@ -1235,6 +1246,45 @@ void work(
 	std::size_t area = area(
 		width1 - width2,
 		height1 - height2);
+}
+```
+
+ Loops over small or empty container are easy to get wrong when the container's size is an unsigned value, even when we chose a signed loop counter.
+ The following fails when passed an empty container.
+ ```cpp
+ void draw_curve(const Container<Point>& points)
+ {
+	 for (std::ptrdiff_t index = 0; index < points.size() - 1; ++index)
+	 {
+		 draw_line(points[index], points[index + 1]);
+	 }
+ }
+```
+The intention is that the `points.size() - 1` upper bound ensures that when we enter the loop body we know that we have one extra point to use as the end point for the line being drawn.
+When the container is empty the first loop iteration condition expression is
+- `index < points.size() - 1`
+- `0 < 0 - 1`
+- `0 < -1`
+- `0 < std::numeric_limits<std::size_t>::max()`
+- `true`
+
+This expression will be true for many values of `index`, as it makes its way from zero towards 18 quintillion, generating lines from whatever data it happens to find in memory until the application, most likely, crashes, possibly leaking all manners of secrets to whomever knows how to listen. Possibly the same person who deliberately sent an empty list of points to `draw_curve`.
+
+To fix this we can either let `index` start at 1 and look backwards instead of starting at 0 and look forwards.
+Then the `- 1` in the condition isn't needed anymore and the wrap, and the problem, goes away.
+Another way is to do the arithmetic using a sane integer type instead.
+Either be letting the `Container::size` member function return a signed type or by casting it to signed as soon as possible [(46)](https://stackoverflow.com/a/18248537).
+```cpp
+void draw_curve(const Container<Point>& points)
+{
+	if (isTooLarge(points, "points", "draw_curve"))
+		return; // Prevent overflow in num_points.
+
+	const std::ptrdiff_t num_points = static_cast<std::ptrdiff_t>(points.size());
+	for (std::ptrdiff_t index = 0; index < num_points - 1; ++index)
+	{
+		draw_line(points[index], points[index + 1]);
+	}
 }
 ```
 
@@ -1412,7 +1462,7 @@ double average(Container<T>& container)
 ```
 
 When `integer_t` is a signed integer type the compiler can use the `cvtsi2sd` instruction to convert `num_elements` to a floating-point number.
-When `integer_t` is unsigned it takes more work, here converting the integer in `rsi` to a floating-point value in `xmm2`:
+When `integer_t` is unsigned it takes more work, here converting the integer in `rsi` to a floating-point value in `xmm2` [(45)](https://stackoverflow.com/a/78132178):
 ```S
 movq      %rsi, %xmm1
 punpckldq .LCPI12_0(%rip), %xmm1
@@ -2238,4 +2288,6 @@ I should make a list here.
 - 43: [_Reducing Signed and Unsigned Mismatches with std::ssize()_ by Bartlomiej Filipek @ cppstories.com 2022](https://www.cppstories.com/2022/ssize-cpp20/)
 - 44: [_Unsigned int considered harmful for Java_ by Nayuki @ nayuki.io 2018](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java)
 - 45: [_Why prefer signed over unsigned in C++_ by Mordachai et.al @ stackoverflow.com 2013](https://stackoverflow.com/questions/18795453/why-prefer-signed-over-unsigned-in-c)
+- 46: [_Why does this if condition fail for comparison of negative and positive integers_ by manav m-n et.al. 2013](https://stackoverflow.com/questions/18247919/why-does-this-if-condition-fail-for-comparison-of-negative-and-positive-integers/18249553#18249553)
+- 47: [_unsigned integers_ by arvid @ blog.libtorrent.org 2016](https://blog.libtorrent.org/2016/05/unsigned-integers/)
 
