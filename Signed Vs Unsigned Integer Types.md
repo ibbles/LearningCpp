@@ -969,11 +969,28 @@ but that is unlikely on a modern computer in most cases since the number of load
 
 ## Under- And Overflow Is Not Undefined Behavior
 
-It's not too bad to have under- or overflow in our loop iterations because at least it isn't undefined behavior  [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
+It's not too bad to have under- or overflow in our loop iterations because at least it isn't undefined behavior  [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing), instead it wraps.
+This means that we can detect it after it has happened, assuming we still have access to the operands.
+```cpp
+void work(Container& container, std::size_t base, std::size_t offset)
+{
+	std::size_t index = base + offset;
+	if (index < base)
+	{
+		report_error("Overflow in work.");
+		return;
+	}
+
+	// Work with container[index].
+```
+This is a good option to have, but it is rarely used in practice [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+It gets a lot harder if we pass `index` somewhere and that code is responsible for detecting whether a prior calculation wrapped or not.
+See _Disadvantages Of Unsigned_ > _Impossible To Reliably Detect Underflow_.
+The above pattern does not work for detecting under- or overflow with signed integers since that is undefined behavior which means that we can't trust anything, it must be prevented from ever happening.
 
 A counter-point is that even if the computation of the bad index isn't undefined behavior,
 using it may be, depending on what it is being used for.
-Indexing into an array or `std::vector` would be undefined behavior.
+Indexing into an array or `std::vector` would be undefined behavior if the index is too large.
 
 Another counter-point is that by making under- and overflow undefined behavior we allow tools, such as undefined behavior sanitizers to find them.
 
@@ -1024,6 +1041,7 @@ wrap_optimization_test(int):
         retq
 ```
 
+
 ## Bit Width Conversions Cheaper
 
 If you mix values with different bit width then unsigned is more efficient because the conversion is a no-op.
@@ -1070,7 +1088,9 @@ Mixing signed and unsigned numbers adds even more surprising behavior [(41)](htt
 ## Can Detect Unintended Negative Values
 
 When an expression unintentionally produces a negative values we can detect that by simply checking if the result is smaller than 0 [(30)](https://www.aristeia.com/Papers/C++ReportColumns/sep95.pdf).
+That makes error reporting easier, and thus more prevalent [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 With unsigned integers we can't do that since there can't be any negative values [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
+That means bad values can more easily pass deeper into our code while doing something wrong [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned), possibly leading to security vulnerabilities.
 In the following the `Container::Container(std::size_t size)` constructor creates a container with `size` elements.
 ```cpp
 std::ptrdiff_t f();
@@ -1137,7 +1157,7 @@ unsigned short process_meshlets(
 
 ## Underflow Is Farther Away From Common Numbers
 
-With signed integers we have a larger margin from commonly used values to the underflow edge [25](https://graphitemaster.github.io/aau/).
+With signed integers we have a larger margin from commonly used values to the underflow edge [25](https://graphitemaster.github.io/aau/), [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 Signed values are well-behaved around zero, a common value [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 Small mistakes are unlikely to cause and underflow [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
 For unsigned types, that boundary point at the busiest spot, zero  [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
@@ -1699,7 +1719,7 @@ This is not possible with unsigned since the `10 * k` part can wrap.
 
 Loops with fixed but unknown number of iterations can be optimized better with signed integers [(16)](https://www.youtube.com/watch?v=g7entxbQOCc).
 
-The compiler can chose to use a larger sized signed integer type if it believes it will make the loop faster since it knows that the smaller sized integer won't overflow and the larger sized integer can hold all values that the smaller can hold [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post23), [(17)](https://youtu.be/yG1OZ69H_-o?t=2357).
+The compiler can chose to use a larger sized signed integer type if it believes it will make the loop faster since it knows that the smaller sized integer won't overflow and the larger sized integer can hold all values that the smaller can hold [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post23), [(17)](https://youtu.be/yG1OZ69H_-o?t=2357), [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 This is not possible with unsigned integer because wrapping is defined.
 ```cpp
 // What the programmer wrote:
@@ -1724,8 +1744,407 @@ void work(Container& container, std::ptrdiff_t end)
 The programmer can do this transformation itself when using unsigned integer, e.g. instead of using` std::uint32_t` use `std::uint64_t` on a 64-bit machine, or `std::size_t` to work on "any" machine [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 ("any"in quotes because there may be machines where `std::size_t` is different from the native arithmetic type. You may consider using one of the `std::uint_fast*_t` types.)
 
+Some code, compiled with Clang 18.1.0.
+
+First example:
+```cpp
+// 32-bit unsigned both for the size and the counter.
+// I see nothing preventing the compiler from producing
+// very good code for this since ++index cannot wrap since
+// it stops when it reaches size, which is must do.
+__attribute((noinline))
+double sum(double* data, unsigned int size)
+{
+    double sum {0.0};
+    for (unsigned int index = 0; index < size; ++index)
+    {
+        sum += data[index];
+    }
+    return sum;
+}
+```
+```S
+sum(double*, unsigned int):
+        testl   %esi, %esi
+        je      .LBB38_1
+        movl    %esi, %edx
+        movl    %edx, %eax
+        andl    $7, %eax
+        cmpl    $8, %esi
+        jae     .LBB38_8
+        xorpd   %xmm0, %xmm0
+        xorl    %ecx, %ecx
+        jmp     .LBB38_4
+.LBB38_1:
+        xorps   %xmm0, %xmm0
+        retq
+.LBB38_8:
+        andl    $-8, %edx
+        xorpd   %xmm0, %xmm0
+        xorl    %ecx, %ecx
+.LBB38_9:
+        addsd   (%rdi,%rcx,8), %xmm0
+        addsd   8(%rdi,%rcx,8), %xmm0
+        addsd   16(%rdi,%rcx,8), %xmm0
+        addsd   24(%rdi,%rcx,8), %xmm0
+        addsd   32(%rdi,%rcx,8), %xmm0
+        addsd   40(%rdi,%rcx,8), %xmm0
+        addsd   48(%rdi,%rcx,8), %xmm0
+        addsd   56(%rdi,%rcx,8), %xmm0
+        addq    $8, %rcx
+        cmpq    %rcx, %rdx
+        jne     .LBB38_9
+.LBB38_4:
+        testq   %rax, %rax
+        je      .LBB38_7
+        leaq    (%rdi,%rcx,8), %rcx
+        xorl    %edx, %edx
+.LBB38_6:
+        addsd   (%rcx,%rdx,8), %xmm0
+        incq    %rdx
+        cmpq    %rdx, %rax
+        jne     .LBB38_6
+.LBB38_7:
+        retq
+```
+
+We see after `.LBB38_9` that the compiler has unrolled the loop for us, passing eight additions at the time to the CPU.
+We also see that the counter is stored in a 64-bit register, either `rcx` (unrolled part) or `rdx` (non-unrolled part under `.LBB38_6`).
+It can do that since `index` starts at 0, the lowest possible value, and walks towards larger values.
+Somewhere along that path it will encounter `size` and stop, and it will do that before `index` has had the chance to wrap.
+
+Second example:
+```cpp
+// 32-bit signed both for the size and the counter.
+// I see nothing preventing the compiler from producing
+// very good code for this.
+__attribute((noinline))
+double sum(double* data, int size)
+{
+    double sum {0.0};
+    for (int index = 0; index < size; ++index)
+    {
+        sum += data[index];
+    }
+    return sum;
+}
+```
+```S
+sum(double*, int):
+        testl   %esi, %esi
+        jle     .LBB39_1
+        movl    %esi, %edx
+        movl    %edx, %eax
+        andl    $7, %eax
+        cmpl    $8, %esi
+        jae     .LBB39_8
+        xorpd   %xmm0, %xmm0
+        xorl    %ecx, %ecx
+        jmp     .LBB39_4
+.LBB39_1:
+        xorps   %xmm0, %xmm0
+        retq
+.LBB39_8:
+        andl    $2147483640, %edx
+        xorpd   %xmm0, %xmm0
+        xorl    %ecx, %ecx
+.LBB39_9:
+        addsd   (%rdi,%rcx,8), %xmm0
+        addsd   8(%rdi,%rcx,8), %xmm0
+        addsd   16(%rdi,%rcx,8), %xmm0
+        addsd   24(%rdi,%rcx,8), %xmm0
+        addsd   32(%rdi,%rcx,8), %xmm0
+        addsd   40(%rdi,%rcx,8), %xmm0
+        addsd   48(%rdi,%rcx,8), %xmm0
+        addsd   56(%rdi,%rcx,8), %xmm0
+        addq    $8, %rcx
+        cmpq    %rcx, %rdx
+        jne     .LBB39_9
+.LBB39_4:
+        testq   %rax, %rax
+        je      .LBB39_7
+        leaq    (%rdi,%rcx,8), %rcx
+        xorl    %edx, %edx
+.LBB39_6:
+        addsd   (%rcx,%rdx,8), %xmm0
+        incq    %rdx
+        cmpq    %rdx, %rax
+        jne     .LBB39_6
+.LBB39_7:
+        retq
+```
+
+Identical to the first example, both in terms of instructions and register sizes used, except for a signed vs unsigned constant under `.LBB39_8` and the use of `jle` instead of `je` at the top top handle negative sizes.
+
+Third example:
+```cpp
+// 64-bit signed for the size, 32-bit signed for the counter.
+// The compiler can assume that size isn't very large since
+// if it were then ++index would overflow. It can chose to
+// use either 64-bit or 32-bit instructions.
+__attribute((noinline))
+double sum(double* data, std::ptrdiff_t size)
+{
+    double sum {0.0};
+    for (int index = 0; index < size; ++index)
+    {
+        sum += data[index];
+    }
+    return sum;
+}
+```
+```S
+sum(double*, long):
+        testq   %rsi, %rsi
+        jle     .LBB40_1
+        movl    %esi, %eax
+        andl    $7, %eax
+        cmpq    $8, %rsi
+        jae     .LBB40_8
+        xorpd   %xmm0, %xmm0
+        xorl    %ecx, %ecx
+        jmp     .LBB40_4
+.LBB40_1:
+        xorps   %xmm0, %xmm0
+        retq
+.LBB40_8:
+        movabsq $9223372036854775800, %rcx
+        andq    %rcx, %rsi
+        xorpd   %xmm0, %xmm0
+        xorl    %ecx, %ecx
+.LBB40_9:
+        addsd   (%rdi,%rcx,8), %xmm0
+        addsd   8(%rdi,%rcx,8), %xmm0
+        addsd   16(%rdi,%rcx,8), %xmm0
+        addsd   24(%rdi,%rcx,8), %xmm0
+        addsd   32(%rdi,%rcx,8), %xmm0
+        addsd   40(%rdi,%rcx,8), %xmm0
+        addsd   48(%rdi,%rcx,8), %xmm0
+        addsd   56(%rdi,%rcx,8), %xmm0
+        addq    $8, %rcx
+        cmpq    %rcx, %rsi
+        jne     .LBB40_9
+.LBB40_4:
+        testq   %rax, %rax
+        je      .LBB40_7
+        leaq    (%rdi,%rcx,8), %rcx
+        xorl    %edx, %edx
+.LBB40_6:
+        addsd   (%rcx,%rdx,8), %xmm0
+        incq    %rdx
+        cmpq    %rdx, %rax
+        jne     .LBB40_6
+.LBB40_7:
+        retq
+```
+
+Again very similar assembly code, though some differences.
+The key observation is that the loop is still unrolled.
+
+Fourth example:
+```cpp
+// 64-bit unsigned for the size, 32-bit unsigned for  the counter.
+// The compiler must ensure that ++index wraps properly.
+__attribute((noinline))
+double sum(double* data, std::size_t size)
+{
+    double sum {0.0};
+    for (unsigned int index = 0; index < size; ++index)
+    {
+        sum += data[index];
+    }
+    return sum;
+}
+```
+```S
+sum(double*, unsigned long):
+        xorpd   %xmm0, %xmm0
+        testq   %rsi, %rsi
+        je      .LBB41_3
+        xorl    %eax, %eax
+.LBB41_2:
+        addsd   (%rdi,%rax,8), %xmm0
+        incq    %rax
+        movl    %eax, %ecx
+        cmpq    %rsi, %rcx
+        jb      .LBB41_2
+.LBB41_3:
+        retq
+```
+
+This time we have put up optimization blockers that prevents the compiler from unrolling the loop.
+There is nothing preventing `++index` from wrapping so the compiler chose to handle one element at the time, expecting a wrap at any iteration.
+
+In a micro benchmark, run on quick-bench.com, the difference is runtime is very small for a small buffer of 1024 elements. The result is similar for larger buffers.
+![Sum micro benchmark](./images/sum_loop_bench_1024.jpg)
+
+- `SumUIntUInt`: 2'961
+- `SumIntInt`: 2'963
+- `SumPtrdiffInt`: 2'961
+- `SumSizeUInt`: 3'039
+
+For an even smaller buffer, 128 elements, the difference is larger.
+
+![Sum micro benchmark](./images/sum_loop_bench_128.jpg)
+
+- `SumUIntUInt`: 269
+- `SumIntInt`: 270
+- `SumPtrdiffInt`: 268
+- `SumSizeUInt`: 339
+
+
+Benchmark code:
+```cpp
+#include <numeric>
+#include <vector>
+
+
+
+std::size_t N {1<<10}; // Or 1 << 7 for 128 elements.
+
+double* getBuffer()
+{
+  static std::vector<double> buffer(N);
+  static bool initialized {false};
+  if (!initialized)
+  {
+    std::iota(buffer.begin(), buffer.end(), 1.0);
+    initialized = true;
+  }
+  return buffer.data();
+}
+
+static void baseline(benchmark::State& state)
+{
+  for (auto _ : state)
+  {
+    double* buffer = getBuffer();
+    benchmark::DoNotOptimize(buffer);
+  }
+}
+
+// BENCHMARK(baseline);
+
+// 32-bit unsigned both for the size and the counter.
+// I see nothing preventing the compiler from producing
+// very good code for this since ++index cannot wrap since
+// it stops when it reaches size, which is must do.
+__attribute((forceinline))
+double sum(double* data, unsigned int size)
+{
+    double s {0.0};
+    for (unsigned int index = 0; index < size; ++index)
+    {
+        s += data[index];
+    }
+    return s;
+}
+
+static void SumUIntUInt(benchmark::State& state)
+{
+  for (auto _ : state)
+  {
+    double s = sum(getBuffer(), static_cast<unsigned int>(N));
+    benchmark::DoNotOptimize(s);
+  }
+}
+
+BENCHMARK(SumUIntUInt);
+
+
+
+
+
+// 32-bit signed both for the size and the counter.
+// I see nothing preventing the compiler from producing
+// very good code for this.
+__attribute((forceinline))
+double sum(double* data, int size)
+{
+    double sum {0.0};
+    for (int index = 0; index < size; ++index)
+    {
+        sum += data[index];
+    }
+    return sum;
+}
+
+static void SumIntInt(benchmark::State& state)
+{
+  for (auto _ : state)
+  {
+    double s = sum(getBuffer(), static_cast<int>(N));
+    benchmark::DoNotOptimize(s);
+  }
+}
+
+BENCHMARK(SumIntInt);
+
+
+
+
+
+// 64-bit signed for the size, 32-bit signed for the counter.
+// The compiler can assume that size isn't very large since
+// if it were then ++index would overflow. It can chose to
+// use either 64-bit or 32-bit instructions.
+__attribute((forceinline))
+double sum(double* data, std::ptrdiff_t size)
+{
+    double sum {0.0};
+    for (int index = 0; index < size; ++index)
+    {
+        sum += data[index];
+    }
+    return sum;
+}
+
+static void SumPtrdiffInt(benchmark::State& state)
+{
+  for (auto _ : state)
+  {
+    double s = sum(getBuffer(), static_cast<std::ptrdiff_t>(N));
+    benchmark::DoNotOptimize(s);
+  }
+}
+
+BENCHMARK(SumPtrdiffInt);
+
+
+
+
+
+// 64-bit unsigned for the size, 32-bit unsigned for  the counter.
+// The compiler must ensure that ++index wraps properly.
+__attribute((forceinline))
+double sum(double* data, std::size_t size)
+{
+    double sum {0.0};
+    for (unsigned int index = 0; index < size; ++index)
+    {
+        sum += data[index];
+    }
+    return sum;
+}
+
+static void SumSizeUInt(benchmark::State& state)
+{
+  for (auto _ : state)
+  {
+    double s = sum(getBuffer(), static_cast<std::size_t>(N));
+    benchmark::DoNotOptimize(s);
+  }
+}
+
+BENCHMARK(SumSizeUInt);
+```
+
+
+
 Though there are some cases where unsigned provides better optimization opportunities.
 For example division [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
+See _Advantages Of Unsigned_ > _More Compiler Optimization Opportunities In Some Cases_.
+
 
 
 ### There is an x86-64 Instruction For Converting A Signed Integer To Floating-Point
@@ -1943,8 +2362,8 @@ The above does not work when the container is empty  since `container.size()`
 
 ## Impossible To Reliably Detect Underflow
 
-It is impossible to detect earlier arithmetic underflow, other than with heuristics.
-By the time we get to the `work` function the damage has already been done.
+It is impossible to detect earlier arithmetic underflow, other than with heuristics [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+By the time we get to the `work` function the damage has already been done and it is difficult to track down where it occurred.
 This is a common source of vulnerabilities and memory safety issues  [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 By using an unsigned integer type for a parameter a programmer may believe they are protected from negative inputs.
 Which is true, in a sense, but it doesn't decrease the number or probability of bugs since the same mistakes that produces a negative value can still happen with unsigned integers.
@@ -1976,7 +2395,7 @@ What should `VERY_LARGE_NUMBER` be set to?
 The smaller we set it to the more cases of underflow we are able to detect, but we also further restrict the set of allowed sizes for the container.
 The larger we set it the bigger containers we support, but we risk missing underflows that wrap past the zero/max boundary and incorrectly enter into the legal range again.
 
-Signed types also has the same problem, but it is less frequent in practice (`citation needed`) since the underflow happens much farther away from commonly used numbers.
+Signed types also has the same problem, but it is less frequent in practice (`citation needed`) since the underflow happens much farther away from commonly used numbers [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 For unsigned types the underflow happens near 0 and a lot of real-world arithmetic is done near 0.
 Also, underflow with signed integer types is undefined behavior.
 
@@ -2482,6 +2901,12 @@ The following identities does not hold with signed integers [(35)](https://lemir
 
 What can a programmer do today to avoid as many pitfalls as possible?
 
+Use a signed type and use one with more range than you think you need [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+Then most of the disadvantages of signed integers are removed.
+Not sure what to do if currently using `int64_t` and maybe possibly need a larger type.
+When would that ever be the case?
+
+
 ## Alternatives To Indexing
 
 Don't use explicit indices at all, do something else instead.
@@ -2566,7 +2991,7 @@ I should make a list here.
 - 22: [_Signed & unsigned integer multiplication_ by phkahler et.al. @ stackoverflow.com 2013](https://stackoverflow.com/questions/16966636/signed-unsigned-integer-multiplication)
 - 23: [_Signed to unsigned conversion in C - is it always safe?_ by cwick et.al @ stackoverflow.com 2008](https://stackoverflow.com/questions/50605/signed-to-unsigned-conversion-in-c-is-it-always-safe)
 - 24: [_Is it a good practice to use unsigned values ?_ by \[deleted\] et.al @ reddit.com/cpp 2018](https://www.reddit.com/r/cpp/comments/7y0o6r/is_it_a_good_practice_to_use_unsigned_values/)
-- 25: [_Almost Always Unsiged_ by Dale Weiler @ graphitemaster.github.io 2022](https://graphitemaster.github.io/aau/)
+- 25: [_Almost Always Unsigned_ by Dale Weiler @ graphitemaster.github.io 2022](https://graphitemaster.github.io/aau/)
 - 26: [_Amost Always Unsigned_ @ reddit.com/cpp 2022](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned/)
 - 27: [_Solutions to Integer Overflow_ by regehr @ regehr.org 2016](https://blog.regehr.org/archives/1401)
 - 28: [_a praise of size_t and other unsigned types_ by Jens Gustedt @ gustedt.wordpress.com 2013](https://gustedt.wordpress.com/2013/07/15/a-praise-of-size_t-and-other-unsigned-types/)
@@ -2598,5 +3023,7 @@ I should make a list here.
 - 54: [_GCC Command Options_ > _3.17 Options for Code Generation Conventions_ @ gcc.gnu.org](https://gcc.gnu.org/onlinedocs/gcc/Code-Gen-Options.html)
 - 55: [_Clang 20.0.0git documentation_ > _UndefinedBehaviorSanitizer_ @ clang.llvm.org](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html)
 - 56: [_Do not use unsigned for non-negativity_ by Eugene Homyakov @ hamstergene.github.io 2021](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity/)
+- 57: [_Almost Always Unsigned_ by graphitemaster et.al. @ reddit.com/cpp 2022](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned/)
+
 
 
