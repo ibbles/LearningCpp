@@ -353,6 +353,20 @@ uint8_t a = 1; // 0000'0001.
     // But it is actually 1111'1111'1111'1111'1111'1111'1111'1110.
 ```
 
+Another example [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned):
+```cpp
+int revenue = -5;            // can be negative when loss, so signed
+unsigned int taxRefund = 3;  // cannot be negative, so unsigned
+cout << "total earnings: " << revenue + taxRefund << endl;
+```
+Output:
+```
+total earnings: 4294967294
+```
+We get a very large value because in the addition we mix signed and unsigned.
+The signed value is converted to unsigned and since it is negative we get a very large value.
+In particular, we get a value that is 4 lower than `std::numeric_limits<unsigned int>::max()`.
+Then 3 (`taxRefund`) is added and we end up 1 (4 - 3) away from the max.
 
 ## Integer Wrapping And Over- / Underflow
 
@@ -525,6 +539,20 @@ bool work(Container& container, std::size_t index)
 	return true;
 ```
 
+
+## Compute Index
+
+In what ways can the following fail [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned)?
+```cpp
+uint64_t base = get_base_index();
+int16_t delta = get_offset(base);
+uint64_t index + base + delta;
+```
+
+- `get_base_index` might not return `uint64_t`.
+- `get_offset` might not return `int16_t`.
+- `delta` is implicitly converted to `uint64_t` for the addition. What happens if it is negative?
+- `index` may be larger than the size of the container it is used to index into.
 
 ## Iterate Backwards
 
@@ -1167,6 +1195,12 @@ Just because the limits are far away from the common values doesn't mean that we
 That is something that is easier to do, accidentally or not, if we don't expect them to ever appear.
 
 Relying on the negative domain of signed integers to skip bounds checking is an appeal to luck, which is not something we should do.
+(What do I mean by this? When would it ever be OK to skip bounds checking just because the value is signed? Do I mean the min/max values, and not valid index bounds?)
+
+Some say that this property doesn't have any value [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+That \[-32768, 32767\] is no better/worse than \[0..65535\], just different.
+That (a < 0) vs (a > 32767) is equivalent.
+
 
 ## Backwards Loops Easier To Write
 
@@ -1975,7 +2009,8 @@ sum(double*, unsigned long):
 This time we have put up optimization blockers that prevents the compiler from unrolling the loop.
 There is nothing preventing `++index` from wrapping so the compiler chose to handle one element at the time, expecting a wrap at any iteration.
 
-In a micro benchmark, run on quick-bench.com, the difference is runtime is very small for a small buffer of 1024 elements. The result is similar for larger buffers.
+In a micro benchmark, run on quick-bench.com, the difference is runtime is very small for a small buffer of 1024 elements.
+The result is similar for larger buffers.
 ![Sum micro benchmark](./images/sum_loop_bench_1024.jpg)
 
 - `SumUIntUInt`: 2'961
@@ -2229,13 +2264,15 @@ Either with an output parameter, returning a tuple or a struct, returning an opt
 ## Unsigned Integer Does Not Model Natural Numbers
 
 They model modular arithmetic [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [(45)](https://stackoverflow.com/a/18796084).
-The arithmetic rules are different [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity).
+The arithmetic rules are different [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity) from regular mathematics.
 Decreasing an unsigned value doesn't necessarily make it smaller since it may wrap around [(45)](https://stackoverflow.com/a/18795568).
-This is true for both signed and unsigned integers, but for signed integers the point where that happens far away from commonly used numbers while for unsigned integers it is right next to the most common number: 0.
+This is true for both signed and unsigned integers, but for signed integers the point where that happens far away from commonly used numbers while for unsigned integers it is right next to the most common number: 0 [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+Unsigned under/overflow has unexpected / unintuitive behavior, which can easily leads to bugs, so it's also bad (even though it's well defined).
 For singed integers under- and overflow is undefined behavior, i.e. it must never happen.
 With unsigned integers neither we as programmers nor the compiler can assume that `x - 1 < x < x + 1`.
 Since under- and overflow is undefined behavior with signed integers the inequalities can be assumed to hold for them.
-The wrapping behavior of unsigned integers helps for some applications, but not if you have high requirements on correctness, safety, and security since accidental wrapping is a common source of bugs and security vulnerabilities. 
+
+The wrapping behavior of unsigned integers helps for some applications, but not if you have high requirements on correctness, safety, and security since accidental wrapping is a common source of bugs and security vulnerabilities (citation needed).
 See also _Advantages Of Signed_ > _Underflow Is Farther Away From Common Numbers_.
 
 Unsigned integers have surprising conversions to/from signed integers, see _Advantages Of Signed_ > _Less Mixing Of Signed And Unsigned_.
@@ -2788,6 +2825,7 @@ if ((b > 0 && a < INT_MIN + b) || (b < 0 && a > INT_MAX + b))
 ```
 
 Injecting undefined behavior into a program doesn't make it safer or more secure[(34)](https://youtu.be/Fa8qcOd18Hc?t=3110).
+The presence of possible undefined behavior can cause the compiler to do unexpected transformations to our code [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 
 ## Must Use A Larger Type To Store Unsigned Input
 
@@ -2905,6 +2943,19 @@ Use a signed type and use one with more range than you think you need [(57)](htt
 Then most of the disadvantages of signed integers are removed.
 Not sure what to do if currently using `int64_t` and maybe possibly need a larger type.
 When would that ever be the case?
+
+It doesn't seem possible to avoid the issues of mixing integers types with different signedness or sizes.
+Instead we should select our types to minimize the damage.
+A small negative value converted to an unsigned type causes the receiver to see a large number.
+A large unsigned value converted to signed produces a negative value.
+Proponents of signed integers claim that getting an unexpected negative value is better than getting an unexpected large value because we can identify the negative value as erroneous.
+
+Error conditions can be prevented or detected using:
+- Ranged types [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+- Preconditions [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+- Postconditions [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+- Invariants [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+- Plenty of asserts [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 
 
 ## Alternatives To Indexing
