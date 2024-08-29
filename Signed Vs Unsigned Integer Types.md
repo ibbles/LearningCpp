@@ -64,7 +64,7 @@ void work(Container& container, integer_t start_skip, integer_t end_skip)
 The initial `std::ptrdiff_t` loop fails if `start_skip` or `end_skip` is negative,
 since that will cause it to index out of bounds of the container.
 
-An even simpler, and I guess more common, variant is to visit all but the last element of a container.
+An even simpler, and I guess more common, variant is to visit all but the last element of a container [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 ```cpp
 void work(Container& container)
 {
@@ -75,9 +75,8 @@ void work(Container& container)
 ]
 ```
 
-This fails with unsigned integers for empty containers.
-`container.size() - 1` becomes `0 - 1` which wraps around to a very large number,
-which causes the loop to run too many iterations.
+This fails with unsigned integers for empty containers while with signed integers it works as expected.
+With unsigned, `container.size() - 1` becomes `0 - 1` which wraps around to a very large number, which causes the loop to run too many iterations.
 
 A signed `integer_t` doesn't save us here if `Container` is an `std::vector` since the problem is because `std::vector::size` has an unsigned return type.
 We must either explicitly check for the empty container case or make sure the end-of-range computation is done using a signed type.
@@ -933,6 +932,20 @@ Another recommendation is to always use signed even in this case.
 
 Using unsigned is a natural choice when working with non-negative quantities such as indices and counts [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [25](https://graphitemaster.github.io/aau/). [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
 
+Taking it one step further.
+Proponents of signed integers say that unsigned integers doesn't model natural numbers, instead they model the ℤ/n ring, which is another concept.
+As programmers we don't need to care about that unless we chose to, i.e. unless we chose to write our code to take wrapping into account and either exploit or prevent it.
+As an alternative, we can pretend that wrapping isn't a thing if we place the requirement on the application's users that they may never provide input that causes any value to wrap.
+
+(I know nothing about torsors, this is a my simplified explanation of the descriptions I've seen.)
+Another way to view the set of unsigned values is to relate them to torsors [(58)](https://math.ucr.edu/home/baez/torsors.html), [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+A torsor is a value that encodes some quantities relative to some arbitrarily chosen reference point.
+A torsor is the opposite of an absolute value.
+For any measurement we can chose a reference point so that the measured value is positive.
+When talking about indices into a container we note that they are not torsors, there is a well-defined location that the index is relative to: the start of the container [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+`std::ptrdiff_t` on the other hand, represents the subtraction between two indices, which is a torsor describing the location of the first index relative to the second.
+That is why the index type `std::size_t` is unsigned and the signed torsor variant `std::ptrdiff_t` is used to represent differences between indices.
+
 ## Makes Invalid Values Unrepresentable
 
 Restricting what values can be passed to a function through the type system is a good way to communicate how the function is meant to be used to both programmers and the compiler.
@@ -962,13 +975,15 @@ For consistency, we should also use `std::size_t` for other sizes, such as the n
 An unsigned integer can address twice as many container elements as an equally-sized signed integer can [(33)](https://stackoverflow.com/questions/10040884/signed-vs-unsigned-integers-for-lengths-counts), [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java), [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
 If you don't need a sign then don't spend a bit on it.
 When no negative numbers are required, unsigned integers are well-suited for networking and systems with little memory, because unsigned integers can store more positive numbers without taking up extra memory.
-This may be important when the index type is small [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [(18)](https://softwareengineering.stackexchange.com/questions/338088/size-t-or-int-for-dimensions-index-etc), such as 16 or possibly even 32-bit in some cases.
+The extra range may be important when the index type is small [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [(18)](https://softwareengineering.stackexchange.com/questions/338088/size-t-or-int-for-dimensions-index-etc), such as 16 or possibly even 32-bit in some cases.
 On 32-bit machines we don't want to be limited to 2 GiB `std::byte` buffers since we have up to 4 GiB of address space.
 This is not a problem for element types larger than a single byte since by then even a signed integer is able to address all of memory due to the size multiplication.
+
 I'm not sure when this will become a restriction for 64-bit signed indices, the largest `std::ptrdiff_t` value is 9'223'372'036'854'775'807.
-For most modern applications on modern hardware the extra bit is not necessary [(15)](https://youtu.be/Puio5dly9N8?t=2561), does not come up in practice very much.
+For most modern applications on modern hardware the extra bit is not necessary [(15)](https://youtu.be/Puio5dly9N8?t=2561), the range limitation does not come up in practice very much.
 The limitation only comes into effect when the container contains single-byte elements such as char,
-with any larger type with run out of addressable memory for the data before we run out of index values in a signed integer.
+with any larger type we run out of addressable memory for the data before we run out of index values in a signed integer.
+Unsigned are sort of legacy of small bit sized machines where the extra bit mattered for range [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 
 If we chose a signed integer instead then we need to motivate the loss of maximum size.
 
@@ -1089,6 +1104,11 @@ See _Advantages Of Signed_ > _More Opportunities For Compiler Optimizations_.
 
 I'm not sure this is true.
 [Link](https://www.reddit.com/r/cpp_questions/comments/1ej5mo0/comment/lgcbrh0/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button).
+
+A better way to put it is that there are domains in which negative values simply doesn't show up, and in those domains it is safe to use an unsigned integer type [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+(
+TODO List a few such domains.
+)
 
 ## The Type Used By Real Programmers
 
@@ -1751,6 +1771,9 @@ This can make auto-vectorization more difficult [(14)](https://eigen.tuxfamily.n
 With signed integers the compiler can simplify `10 * k / 2` to `5 * k`.
 This is not possible with unsigned since the `10 * k` part can wrap.
 
+With signed integers the compiler can simplify `a+n < b+n` to `a < b` [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+With unsigned integers this is not possible since one of the additions might wrap while the other does not.
+
 Loops with fixed but unknown number of iterations can be optimized better with signed integers [(16)](https://www.youtube.com/watch?v=g7entxbQOCc).
 
 The compiler can chose to use a larger sized signed integer type if it believes it will make the loop faster since it knows that the smaller sized integer won't overflow and the larger sized integer can hold all values that the smaller can hold [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post23), [(17)](https://youtu.be/yG1OZ69H_-o?t=2357), [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
@@ -2027,6 +2050,7 @@ For an even smaller buffer, 128 elements, the difference is larger.
 - `SumPtrdiffInt`: 268
 - `SumSizeUInt`: 339
 
+I would like to make a plot with increasing buffer sizes.
 
 Benchmark code:
 ```cpp
@@ -2265,12 +2289,16 @@ Either with an output parameter, returning a tuple or a struct, returning an opt
 
 They model modular arithmetic [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [(45)](https://stackoverflow.com/a/18796084).
 The arithmetic rules are different [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity) from regular mathematics.
-Decreasing an unsigned value doesn't necessarily make it smaller since it may wrap around [(45)](https://stackoverflow.com/a/18795568).
-This is true for both signed and unsigned integers, but for signed integers the point where that happens far away from commonly used numbers while for unsigned integers it is right next to the most common number: 0 [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+It models the ℤ/n ring, not the natural numbers.
+Which is weird for a container size since there is no sane situation where adding more elements to a container suddenly makes it empty.
+Decreasing an unsigned value doesn't necessarily make it smaller since it may wrap around [(45)](https://stackoverflow.com/a/18795568), and similar for increasing it not necessarily making it larger.
+This is true, in some sense, for both signed and unsigned integers, but for signed integers the point where that happens far away from commonly used numbers while for unsigned integers it is right next to the most common number: 0 [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 Unsigned under/overflow has unexpected / unintuitive behavior, which can easily leads to bugs, so it's also bad (even though it's well defined).
 For singed integers under- and overflow is undefined behavior, i.e. it must never happen.
 With unsigned integers neither we as programmers nor the compiler can assume that `x - 1 < x < x + 1`.
 Since under- and overflow is undefined behavior with signed integers the inequalities can be assumed to hold for them.
+
+Do not use an unsigned integer type if you ever need to do subtraction [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 
 The wrapping behavior of unsigned integers helps for some applications, but not if you have high requirements on correctness, safety, and security since accidental wrapping is a common source of bugs and security vulnerabilities (citation needed).
 See also _Advantages Of Signed_ > _Underflow Is Farther Away From Common Numbers_.
@@ -2405,8 +2433,53 @@ This is a common source of vulnerabilities and memory safety issues  [(34)](http
 By using an unsigned integer type for a parameter a programmer may believe they are protected from negative inputs.
 Which is true, in a sense, but it doesn't decrease the number or probability of bugs since the same mistakes that produces a negative value can still happen with unsigned integers.
 The only difference is that instead of getting an easily identifiable negative value we get a very large positive value [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity).
+Using unsigned parameters in this way is an attempt at encoding a precondition with the type system, but unfortunately it fails because of implicit type conversions [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 It is a false sense of security, the type system does not help us in this case despite what the `unsigned` word in the parameter list may lead us to believe.
 We are tricked into ignoring this whole category of bugs because we think we are safe from them.
+We could improve the situation somewhat by introducing an unsigned integer like type that don't allow creation from signed values [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+Then we won't have any unexpected surprises from implicit conversions.
+```cpp
+class Unsigned
+{
+public:
+    Unsigned() : m_value(0) {}
+    Unsigned(std::uint8_t value) : m_value(value) {}
+    Unsigned(std::uint16_t value) : m_value(value) {}
+    Unsigned(std::uint32_t value) : m_value(value) {}
+    Unsigned(std::uint64_t value) : m_value(value) {}
+    // TODO Are more types here as they are added to the language.
+
+    Unsigned& operator=(Unsigned other) { m_value = other.m_value; }
+    operator std::size_t() const { return m_value; }
+
+    Unsigned(std::int8_t) = delete;
+    Unsigned(std::int16_t) = delete;
+    Unsigned(std::int32_t) = delete;
+    Unsigned(std::int64_t) = delete;
+    // TODO Are more types here as they are added to the language.
+
+private:
+    std::size_t m_value;
+};
+```
+
+But it comes with drawbacks as well [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+- It adds friction and other unwanted behavior until get get the type "perfect", if that is even possible.
+	- For example, this doesn't compile when used with the `Unsigned` type above:
+```cpp
+template <typename T>
+volatile T dont_optimize {};
+
+template <typename T>
+__attribute((noinline))
+void consume(T value)
+{
+    dont_optimize<T> = value;
+}
+```
+- (TODO add more here.)
+
+The above can be expanded to a unit library, with types defining what operations are allowed on them, and have the resulting type of an operation not necessarily being the same as the operands [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 
 In the code below the programmer decided that the container passed to `work` should never contain more than `VERY_LARGE_NUMBER`, some constant defined somewhere, and any index argument larger than that is a sign that we had an underflow in the computation of that argument.
 
@@ -2522,7 +2595,7 @@ For unsigned integers the edge is at 0, for signed integers it is at some large 
 
 ## Under- And Overflow Is Not An Error
 
-And thus not reported by error detection tools such as undefined behavior sanitizers, unless explicitly enabled with `-fsanitize=unsigned-integer-overflow` but beware that this may trigger on intentional wrapping.
+And thus not reported by error detection tools such as undefined behavior sanitizers, unless explicitly enabled with `-fsanitize=unsigned-integer-overflow` but beware that this may trigger on intentional wrapping [(55)](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html).
 
 ```cpp
 std::size_t x = /* Expression. */;
@@ -3075,6 +3148,6 @@ I should make a list here.
 - 55: [_Clang 20.0.0git documentation_ > _UndefinedBehaviorSanitizer_ @ clang.llvm.org](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html)
 - 56: [_Do not use unsigned for non-negativity_ by Eugene Homyakov @ hamstergene.github.io 2021](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity/)
 - 57: [_Almost Always Unsigned_ by graphitemaster et.al. @ reddit.com/cpp 2022](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned/)
-
+- 58: [_Torsors Made Easy_ by John Baez @ math.ucr.edu/ 2009](https://math.ucr.edu/home/baez/torsors.html)
 
 
