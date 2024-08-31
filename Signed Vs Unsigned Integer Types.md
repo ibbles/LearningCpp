@@ -948,13 +948,15 @@ That is why the index type `std::size_t` is unsigned and the signed torsor varia
 
 ## Makes Invalid Values Unrepresentable
 
-Restricting what values can be passed to a function through the type system is a good way to communicate how the function is meant to be used to both programmers and the compiler.
+Restricting what values can be passed to a function through the type system is a good way to communicate how the function is meant to be used to both programmers and the compiler [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
 It simplifies the written documentation required.
 
-At least it would be good if we didn't have implicit signed → unsigned conversions.
+At least it would be good if we didn't have implicit signed → unsigned conversions [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
 And if arithmetic over- and underflow was an error instead of wrapping.
 Passing a negative signed value into a function taking an unsigned parameter is a common source of bugs [(15)](https://youtu.be/Puio5dly9N8?t=2561),
-making the parameter an unsigned integer type doesn't protect us from that unfortunately.
+making the parameter an unsigned integer type doesn't protect us from that unfortunately, it simply hides it [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+Expressions that should have resulted in a negative value instead becomes a positive value, i.e. it conforms to the restrictions of the interface even though it really should not.
+Using a signed type reveals the bug instead [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU), which is better.
 
 ## Integrates Well With The Standard Library Containers
 
@@ -979,7 +981,10 @@ The extra range may be important when the index type is small [(13)](https://www
 On 32-bit machines we don't want to be limited to 2 GiB `std::byte` buffers since we have up to 4 GiB of address space.
 This is not a problem for element types larger than a single byte since by then even a signed integer is able to address all of memory due to the size multiplication.
 
-I'm not sure when this will become a restriction for 64-bit signed indices, the largest `std::ptrdiff_t` value is 9'223'372'036'854'775'807.
+In many cases we can use a larger signed type instead of a small unsigned type to get more range.
+The signed option gives even more range [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+
+I'm not sure when only having half the range will become a problem for 64-bit signed indices, the largest `std::ptrdiff_t` value is 9'223'372'036'854'775'807.
 For most modern applications on modern hardware the extra bit is not necessary [(15)](https://youtu.be/Puio5dly9N8?t=2561), the range limitation does not come up in practice very much.
 The limitation only comes into effect when the container contains single-byte elements such as char,
 with any larger type we run out of addressable memory for the data before we run out of index values in a signed integer.
@@ -1131,7 +1136,7 @@ Using the type that is more similar to our intuition of how numbers work makes i
 
 Small negative numbers are more common than very large positive numbers.
 
-Mixing signed and unsigned numbers adds even more surprising behavior [(41)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf).
+Mixing signed and unsigned numbers adds even more surprising behavior [(41)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf), [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
 
 ## Can Detect Unintended Negative Values
 
@@ -1408,8 +1413,31 @@ There is `-fwrapv`, (I had something more in mind to write here.).
 
 ## Less Mixing Of Signed And Unsigned
 
-One source of bugs is when signed and unsigned values are mixed in an expression [(7)](https://google.github.io/styleguide/cppguide.html#Integer_Types), [(12)](https://www.sandordargo.com/blog/2023/10/11/cpp20-intcmp-utilities), [(15)](https://youtu.be/Puio5dly9N8?t=2561), [(41)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf). [(45)](https://stackoverflow.com/a/18796546), [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity).
+One source of bugs is when signed and unsigned values are mixed in an expression [(7)](https://google.github.io/styleguide/cppguide.html#Integer_Types), [(12)](https://www.sandordargo.com/blog/2023/10/11/cpp20-intcmp-utilities), [(15)](https://youtu.be/Puio5dly9N8?t=2561), [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU), [(41)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf). [(45)](https://stackoverflow.com/a/18796546), [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity).
 This leads to implicit conversions and results that are difficult to predict for many programmers.
+
+The problem is that C++ doesn't use the values two variables have when an operator is given variables of different types.
+Instead integer promotion [(50)](https://eel.is/c++draft/conv.prom) and the usual arithmetic conversions happen [(49)](https://eel.is/c++draft/expr.arith.conv).
+An example making the effect obvious [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU):
+```cpp
+signed int a {-1};
+unsigned int b {1};
+if (a < b)
+{
+	// Not executed.
+}
+else
+{
+	// Is executed.
+}
+```
+
+So why is -1 not less than 1?
+What happens, in this case, is that the signed variable, which has a low value, is converted to the type of the unsigned variable.
+Since the signed variable has a value not representable in unsigned type we get "garbage".
+(Not actual garbage, the value we get is well defined, but in many cases it is indistinguishable for garbage since we got a completely different value.)
+This is surprising, and arguably bad language design.
+
 For example, the following two expressions, that use the same values, produce different results [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity).
 ```cpp
 int base = 12;
@@ -2611,8 +2639,76 @@ For more on this, see _Advantages Of Signed_ > _Less Mixing Of Signed And Unsign
 
 ## Impossible To Have Negative Intermediate Result
 
-While a container size cannot be negative, one size minus another absolutely can be [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity).
+While a container size cannot be negative, one size minus another absolutely can be [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity), [(59)](https://stackoverflow.com/questions/2550774/what-is-size-t-in-c/2551647#2551647).
+```cpp
+void work(Container& container1, Container& container2)
+{
+	// This is bad.
+	std::size_t size_diff = continer1.size() - container2.size();
+}
+```
+
 While an index cannot be negative, the expression to compute the index may contain negative intermediate results.
+You cannot use an unsigned integer types in these cases [(59)](https://stackoverflow.com/questions/2550774/what-is-size-t-in-c/2551647#2551647).
+
+While not guaranteed, for many expressions it actually does work out correctly even when intermediate results are negative.
+The wrapping behavior makes it so that once we compute ourselves back to positive values we end up at the correct value.
+This works for addition, subtraction, and multiplication, but not for division.
+Two examples that works.
+```cpp
+std::size_t base {4};
+std::size_t neg_step {2};
+std::size_t num_neg_steps {4};
+std::size_t pos_step {3};
+std::size_t num_pos_steps {3};
+std::size_t index =
+				base // 4, so 4 so far.
+				- (neg_step * num_neg_steps) // -8, so -4 so far.
+				+ (pos_step * num_pos_steps)); // +9, so index = 5.
+```
+```cpp
+std::size_t base {4};
+std::size_t neg_step (-2); // "Negative" value instead of subtraction below.
+std::size_t num_neg_steps {4};
+std::size_t pos_step {3};
+std::size_t num_pos_steps {3};
+std::size_t index =
+				base // 4 so far.
+				+ (neg_step * num_neg_steps) // 18446744073709551608
+				+ (pos_step * num_pos_steps)); // Wrap back to 5.
+```
+
+Example that doesn't work, i.e. that uses division.
+```cpp
+std::size_t base {4};
+std::size_t neg_step {2};
+std::size_t num_neg_steps {4};
+std::size_t div {2};
+std::size_t num_pos_steps {7};
+std::size_t corrected = base - (neg_step * num_neg_steps); // -4
+std::size_t index = (corrected / div) + num_pos_steps; // -2 + 7 = 5? No :(
+```
+
+The problem with division is that it doesn't "walk across the line" like addition, subtraction and multiplication does.
+Instead it takes the very large "negative" value and makes it smaller, i.e it walks _away_ from the wrap line.
+So when we expected -2 we instead got 9223372036854775806.
+Note that his is about half of the maximum value of 18446744073709551615.
+So at that point we're completely off on the number line and we won't ever be getting back.
+
+It is unfortunate that the result of the computation ends up correct in some cases but not always.
+Especially when the cases that work are more common (citation needed), but a slight change, e.g. divide by the size of something, and the whole thing falls apart unexpectedly.
+
+It can also be safe to cast the unsigned value to signed and get the expected negative value.
+```cpp
+std::size_t large = 1000;
+std::size_t small = 400;
+std::size_t udiff = small - large;
+std::ptrdiff_t sdiff = static_cast<std::ptrdiff_t>(udiff);
+// udiff = 18446744073709551016
+// sdiff = -600
+```
+
+
 
 ## Backwards Loops Non-Trivial To Write
 
@@ -2716,12 +2812,12 @@ There are many reasonable sized negative values that cannot be represented by an
 
 ## Difficult To Interact With The Standard Library
 
-The standard library uses unsigned integer types for many things, in particular `size_t size() const` and `T& operator[](size_t index)`.
+The standard library uses unsigned integer types for many things [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU), in particular `size_t size() const` and `T& operator[](size_t index)`.
 This makes working with the standard library with `integer_t` being signed difficult since we are forced to mix signed and unsigned values in expressions and get sign-conversion warnings all over the place if `-Wsign-conversion` is enabled [(41)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf),
 or explicitly cast our index variables from signed to unsigned on every container access.
-This creates verbose, noisy, and difficult to read code, and we risk incorrect behavior if we ever encounter a `std::size_t`  value larger than `std::numeric_limits<std::ptrdiff_t>::max()` [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc)****.
+This creates verbose, noisy, and difficult to read code, and we risk incorrect behavior if we ever encounter a `std::size_t`  value larger than `std::numeric_limits<std::ptrdiff_t>::max()` [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 It is unclear how such a case should be handled.
-The same is true for interactions with much of the C standard library, `strlen`, `memcpy`, and such.
+The same is true for interactions with much of the C standard library, `malloc`, `strlen`, `memcpy`, and such [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
 ```cpp
 void work(Container& container)
 {
@@ -3011,6 +3107,19 @@ The following identities does not hold with signed integers [(35)](https://lemir
 # Recommendations
 
 What can a programmer do today to avoid as many pitfalls as possible?
+
+Don't use unsigned for quantities [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+
+Don't do math on unsigned types [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+
+Don't mix signed and unsigned types [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+
+Use unsigned only for:
+- bitmasks [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+
+Don't use unsigned when you need:
+- mathematical operations [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+- compare magnitudes [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
 
 Use a signed type and use one with more range than you think you need [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 Then most of the disadvantages of signed integers are removed.
