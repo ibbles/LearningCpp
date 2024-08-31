@@ -1,3 +1,11 @@
+
+
+
+Continue at
+> Unsigned does not mean "not negative", it means "modular arithmetic".
+
+
+
 (
 TODO
 Consider structuring the note as a sequence or functions to implement and ways of implementing it.
@@ -186,6 +194,7 @@ The aim has been to find examples where the straight-forward way to write someth
 If what the code says, or at least implies after a quick glance, isn't what the code does then there is a deeper problem than just "bad code, bad programmer".
 We are not content with having the code being correct when we first check it in, we also want it to remain correct through multiple rounds of modifications by multiple people.
 Real-world programmers writing real-world programs tend to have other concerns in mind than the minutiae of implicit integer conversion rules and overflow semantics.
+What we want to do is reduce the number of ways things can go wrong, reduce the fallout of an errant process, and minimize cognitive load to reduce bugs overall [(62)](https://news.ycombinator.com/item?id=29766658).
 We want tools, language and compiler included, that help us prevent errors [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
 
 For this discussion we assume a 64-bit machine with 32-bit `int`.
@@ -933,7 +942,7 @@ Another recommendation is to always use signed even in this case.
 Using unsigned is a natural choice when working with non-negative quantities such as indices and counts [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [25](https://graphitemaster.github.io/aau/). [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
 
 Taking it one step further.
-Proponents of signed integers say that unsigned integers doesn't model natural numbers, instead they model the ℤ/n ring, which is another concept.
+Proponents of signed integers say that unsigned integers doesn't model natural numbers, instead they model the ℤ/n ring, which is another concept (citation needed).
 As programmers we don't need to care about that unless we chose to, i.e. unless we chose to write our code to take wrapping into account and either exploit or prevent it.
 As an alternative, we can pretend that wrapping isn't a thing if we place the requirement on the application's users that they may never provide input that causes any value to wrap.
 
@@ -1103,6 +1112,12 @@ On the other hand, with signed values the compiler may not need to do any conver
 In some cases it can transform the code to use the target type form the start [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post23).
 See _Advantages Of Signed_ > _More Opportunities For Compiler Optimizations_.
 
+## Sometimes We Really Want Modular Arithmetic
+
+For example in cryptography, check sums, hash, functions, timer, etc.
+Sure. Then use unsigned.
+That doesn't imply that other things, such as sizes and indices, should be unsigned.
+
 ## Most Values Are Positive And Positive Values Rarely Mix With Negative Values
 
 [25](https://graphitemaster.github.io/aau/)
@@ -1119,6 +1134,7 @@ TODO List a few such domains.
 
 Unsigned unsigned integers is absolutely safe if you know what you are doing and make no mistakes [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
 If you get burned by any of the pitfalls associated with using unsigned integers then you are a bad programmer [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
+We should not allow programmers to switch their brains off because signed overflow is "unlikely" to happen [(62)](https://news.ycombinator.com/item?id=29766658).
 Good tools create weak programmers, programming should be tough [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
 It is what God intended [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 
@@ -1140,10 +1156,12 @@ Mixing signed and unsigned numbers adds even more surprising behavior [(41)](htt
 
 ## Can Detect Unintended Negative Values
 
-When an expression unintentionally produces a negative values we can detect that by simply checking if the result is smaller than 0 [(30)](https://www.aristeia.com/Papers/C++ReportColumns/sep95.pdf).
+When a signed expression unintentionally produces a negative values we can detect that by simply checking if the result is smaller than 0 [(30)](https://www.aristeia.com/Papers/C++ReportColumns/sep95.pdf).
 That makes error reporting easier, and thus more prevalent [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
-With unsigned integers we can't do that since there can't be any negative values [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
+With unsigned integers we can't do that since there can't be any negative values [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone), [(62)](https://news.ycombinator.com/item?id=29766658).
 That means bad values can more easily pass deeper into our code while doing something wrong [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned), possibly leading to security vulnerabilities.
+The original bug is the same, but the impact is different.
+
 In the following the `Container::Container(std::size_t size)` constructor creates a container with `size` elements.
 ```cpp
 std::ptrdiff_t f();
@@ -1216,16 +1234,16 @@ Small mistakes are unlikely to cause and underflow [(31)](https://critical.esche
 For unsigned types, that boundary point at the busiest spot, zero  [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
 
 Tough beware of malicious inputs that intentionally bring the program close to the domain boundaries [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
-Just because the limits are far away from the common values doesn't mean that we can ignore them.
+Just because the limits are far away from the common values doesn't mean that we can ignore them [(62)](https://news.ycombinator.com/item?id=29766658).
 That is something that is easier to do, accidentally or not, if we don't expect them to ever appear.
+This can lead to security vulnerabilities.
 
 Relying on the negative domain of signed integers to skip bounds checking is an appeal to luck, which is not something we should do.
 (What do I mean by this? When would it ever be OK to skip bounds checking just because the value is signed? Do I mean the min/max values, and not valid index bounds?)
 
 Some say that this property doesn't have any value [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 That \[-32768, 32767\] is no better/worse than \[0..65535\], just different.
-That (a < 0) vs (a > 32767) is equivalent.
-
+That `a < 0` vs `a > 32767` is equivalent.
 
 ## Backwards Loops Easier To Write
 
@@ -1411,6 +1429,29 @@ We may want the check in some parts of the code but not others.
 The real world is not as neat as some language lawyers would like to believe.
 There is `-fwrapv`, (I had something more in mind to write here.).
 
+For a real-world example consider the famous case [(61)](https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/) of integer overflow plaguing many binary search implementations.
+While running a binary search we need to compute a mid-point between two indices.
+One way to do this is `mid = (low + high) / 2`.
+If we have a large range then the `low + high` part can overflow.
+It doesn't matter if we use signed or unsigned indices.
+The proposed fix is to use `mid = low + (high - low) / 2` instead.
+This fixes the problem by computing a relative offset, which small, instead of the big sum.
+Would the following also work? (I think so, it is basically the second solution in [_Extra, Extra - Read All About It: Nearly All Binary Searches and Mergesorts are Broken_ (61)](https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/)
+```cpp
+std::ptrdiff_t high = /* Something. */;
+std::ptrdiff_t low = /* Something. */;
+std::ptrdiff_t mid =
+	static_cast<std::ptrdiff_t>(
+		(
+			static_cast<std::size_t>(low)
+			+ static_cast<std::size_t>(high)
+		)
+		/ 2u);
+```
+The idea is that since unsigned has double the range of signed then it can safely hold the sum of two signed integers.
+Then we divide by 2 and bring the value back down into the range of the signed integer type.
+So we use the extra space available to unsigned integers as an overflow protection area for the intermediate result, and then return back to signed land.
+
 ## Less Mixing Of Signed And Unsigned
 
 One source of bugs is when signed and unsigned values are mixed in an expression [(7)](https://google.github.io/styleguide/cppguide.html#Integer_Types), [(12)](https://www.sandordargo.com/blog/2023/10/11/cpp20-intcmp-utilities), [(15)](https://youtu.be/Puio5dly9N8?t=2561), [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU), [(41)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf). [(45)](https://stackoverflow.com/a/18796546), [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity).
@@ -1433,7 +1474,8 @@ else
 ```
 
 So why is -1 not less than 1?
-What happens, in this case, is that the signed variable, which has a low value, is converted to the type of the unsigned variable.
+What happens, in this case, is that the signed variable, which has a low value, is converted to the type of the unsigned variable [(49)](https://eel.is/c++draft/expr.arith.conv).
+See _Dangers_ > _Implicit Conversions_.
 Since the signed variable has a value not representable in unsigned type we get "garbage".
 (Not actual garbage, the value we get is well defined, but in many cases it is indistinguishable for garbage since we got a completely different value.)
 This is surprising, and arguably bad language design.
@@ -1468,19 +1510,20 @@ if (base - offset < size)
 	// This is false since 12 - 25 = 4294967283, which is greater than 32.
 }
 ```
-This variant is particularly insidious  if the `size` value is a function since in that case ALL values we declare are signed and a signed left hand side is computed for the comparison, but then the value is implicitly converted to unsigned and destroyed in the process.
+This variant is particularly insidious if the `size` value is a function since in that case ALL values we declare are signed and a signed left hand side is computed for the comparison, but then the value is implicitly converted to unsigned and destroyed in the process.
 ```cpp
 int base = 12;
 int offset = 25;
 if (base - offset < container.size())
 {
-	// This is often false since 12 - 25 = 4294967283,
+	// This is often false since, surprisingly,
+	// 12 - 25 = 4294967283
 	// which is greater than most container sizes.
 }
 ```
-To avoid this problem, use `std::ssize` instead of `Container::size`.
+To avoid this problem use `std::ssize`, which returns a singed integer, instead of `Container::size`.
 
-Make one more type change and we get a true result again:
+Make one more type change and we get the expected result again:
 ```cpp
 int64_t base = 12;
 int offset = 25;
@@ -1490,9 +1533,9 @@ if (base - offset < size)
 	// This is true since 12 - 25 = -13, which is less than 32.
 }
 ```
-In this case it is the right hand side that is converted to the type of the left hand side instead of vice versa.
+In this case it is the unsigned right hand side that is converted to the type of the left hand side instead, signed, of vice versa because the left hand side has a larger bit width.
 
-A real-world example may be a line like the following:
+A real-world example may be a line like the following [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity):
 ```cpp
 if (source_index - findTargetIndex() < getSize())
 ```
@@ -1708,6 +1751,8 @@ k < i; // True.
 ```
 
 When the index comes from a non-trivial arithmetic expression - each type conversion incurs additional cost, be it in the form of additional runtime checks, reduced code clarity or a risk of semantic mistakes. So, for this scenario, there is an objective preference: we want to use the same type for indexes as is used for the majority of arithmetic expressions that generate them [(21)](https://internals.rust-lang.org/t/subscripts-and-sizes-should-be-signed/17699).
+
+Signed and unsigned integer types have different ranges so every time we convert between them we risk accidental overflow [(62)](https://news.ycombinator.com/item?id=29766658).
 
 Martin Beeger summarizes the mixing issue well  [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post15)
 
@@ -2318,7 +2363,7 @@ Either with an output parameter, returning a tuple or a struct, returning an opt
 They model modular arithmetic [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [(45)](https://stackoverflow.com/a/18796084).
 The arithmetic rules are different [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity) from regular mathematics.
 It models the ℤ/n ring, not the natural numbers.
-Which is weird for a container size since there is no sane situation where adding more elements to a container suddenly makes it empty.
+Which is weird for a container size since there is no sane situation where adding more elements to a container suddenly makes it empty (forgot to put citation here.).
 Decreasing an unsigned value doesn't necessarily make it smaller since it may wrap around [(45)](https://stackoverflow.com/a/18795568), and similar for increasing it not necessarily making it larger.
 This is true, in some sense, for both signed and unsigned integers, but for signed integers the point where that happens far away from commonly used numbers while for unsigned integers it is right next to the most common number: 0 [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 Unsigned under/overflow has unexpected / unintuitive behavior, which can easily leads to bugs, so it's also bad (even though it's well defined).
@@ -2326,7 +2371,7 @@ For singed integers under- and overflow is undefined behavior, i.e. it must neve
 With unsigned integers neither we as programmers nor the compiler can assume that `x - 1 < x < x + 1`.
 Since under- and overflow is undefined behavior with signed integers the inequalities can be assumed to hold for them.
 
-Do not use an unsigned integer type if you ever need to do subtraction [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+Do not use an unsigned integer type if you ever need to do subtraction [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned), too often it silently does the wrong thing [(62)](https://news.ycombinator.com/item?id=29766658).
 
 The wrapping behavior of unsigned integers helps for some applications, but not if you have high requirements on correctness, safety, and security since accidental wrapping is a common source of bugs and security vulnerabilities (citation needed).
 See also _Advantages Of Signed_ > _Underflow Is Farther Away From Common Numbers_.
@@ -2455,7 +2500,7 @@ The above does not work when the container is empty  since `container.size()`
 
 ## Impossible To Reliably Detect Underflow
 
-It is impossible to detect earlier arithmetic underflow, other than with heuristics [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+It is impossible to detect earlier arithmetic underflow, other than with heuristics [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned), [(62)](https://news.ycombinator.com/item?id=29766658).
 By the time we get to the `work` function the damage has already been done and it is difficult to track down where it occurred.
 This is a common source of vulnerabilities and memory safety issues  [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 By using an unsigned integer type for a parameter a programmer may believe they are protected from negative inputs.
@@ -2693,7 +2738,7 @@ The problem with division is that it doesn't "walk across the line" like additio
 Instead it takes the very large "negative" value and makes it smaller, i.e it walks _away_ from the wrap line.
 So when we expected -2 we instead got 9223372036854775806.
 Note that his is about half of the maximum value of 18446744073709551615.
-So at that point we're completely off on the number line and we won't ever be getting back.
+So at that point we're completely off on the number circle and we won't ever be getting back.
 
 It is unfortunate that the result of the computation ends up correct in some cases but not always.
 Especially when the cases that work are more common (citation needed), but a slight change, e.g. divide by the size of something, and the whole thing falls apart unexpectedly.
@@ -3121,6 +3166,8 @@ Don't use unsigned when you need:
 - mathematical operations [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
 - compare magnitudes [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
 
+Build with `-Wconversion`.
+
 Use a signed type and use one with more range than you think you need [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 Then most of the disadvantages of signed integers are removed.
 Not sure what to do if currently using `int64_t` and maybe possibly need a larger type.
@@ -3179,6 +3226,38 @@ What about the largest unsigned type?
 Require that `sizeof(intmax_t)` be larger than `sizeof(uintmax_t)`?
 That sounds... bad.
 
+## Overflow Bit
+
+It would help to have some way to detect that an overflow happened, either as part of a type's representation or within the CPU.
+
+For example, we could dedicate one bit of the value representation as a poison bit to indicated that this value had an under- or overflow in its calculation [(62)](https://news.ycombinator.com/item?id=29766658), [(63)](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n2868.pdf).
+Whenever an under- or overflow happens the poison bit is set, and whenever a poisoned value is passed to an operator the result also has the poisoned bit set.
+This way we can do computations as usual, get the same result as we do today, but also check is if an overflow happened after the fact.
+```cpp
+std::size_t base = /* Some value. */;
+std::size_t block_index = /* Some value. */;
+std::size_t block_size = /* Some value. */;
+std::size_t index = base + block_index * block_size;
+if (is_under_or_overflow(index))
+{
+	log_error("Overflow detected in index calculation.");
+	return;
+}
+```
+
+Variant using a CPU flag instead, similar to what we already have for floating-point operations [(64)](https://man7.org/linux/man-pages/man3/fenv.3.html).
+```cpp
+clear_cpu_flag(UNDEROVERFLOW_BIT);
+std::size_t base = /* Some value. */;
+std::size_t block_index = /* Some value. */;
+std::size_t block_size = /* Some value. */;
+std::size_t index = base + block_index * block_size;
+if (test_cpu_flag(UNDEROVERFLOW_BIT))
+{
+	log_error("Overflow detected in index calculation.");
+	return;
+}
+```
 
 # Signed Overloads In The Standard Library
 
@@ -3259,5 +3338,9 @@ I should make a list here.
 - 57: [_Almost Always Unsigned_ by graphitemaster et.al. @ reddit.com/cpp 2022](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned/)
 - 58: [_Torsors Made Easy_ by John Baez @ math.ucr.edu/ 2009](https://math.ucr.edu/home/baez/torsors.html)
 - 59: [_What is size_t in C?_ by Vijay. Alok Singhal, Jason Oster, et.al @ stackoverflow.com 2010](https://stackoverflow.com/questions/2550774/what-is-size-t-in-c/2551647#2551647)
-
+- 60: [_Choosing the type of Index Variables_ by sarat et.al @ stackoverflow.com 2011](# [Choosing the type of Index Variables](https://softwareengineering.stackexchange.com/questions/104591/choosing-the-type-of-index-variables))
+- 61: [_Extra, Extra - Read All About It: Nearly All Binary Searches and Mergesorts are Broken_ by Joshua Bloch @ research.google.com/blog](https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/)
+- 62: [_Almost Always Unsigned_ comments @ news.ycombinator.com 2022](https://news.ycombinator.com/item?id=29766658)
+- 63: [_Supplemental Integer Safety_ by David Svoboda @ open-std.org 2021](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n2868.pdf)
+- 64: [_fenv_ @ man7.org](https://man7.org/linux/man-pages/man3/fenv.3.html)
 
