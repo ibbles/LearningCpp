@@ -319,7 +319,7 @@ it is just the way these types work.
 Because overflow of signed integers is undefined behavior the compiler does not need to consider this case when generating machine code.
 This can in some cases produce more efficient code (`citation needed`).
 
-Since there are a number of bugs stepping from unintended conversions between signed and unsigned integer types many compilers include warnings for this, often enabled with `-Wconversion`, `-Wsign-conversion`, and/or `-Wsign-compare`.
+Since there are a number of bugs stemming from unintended conversions between signed and unsigned integer types many compilers include warnings for this, often enabled with `-Wconversion`, `-Wsign-conversion`, and/or `-Wsign-compare`.
 
 It has been difficult to find or come up with good illustrative examples that demonstrates the various problems described in this note.
 Examples are often trivial and hard to map to real-world production code.
@@ -342,8 +342,8 @@ we mean that it was unexpected that this particular operation reached that end.
 
 ## Implicit Conversions
 
-C++ has counter intuitive, and numerically incorrect, implicit conversion rules.
-A combination of promotions [(50)](https://eel.is/c++draft/conv.prom) and usual arithmetic conversions [(48)](https://en.cppreference.com/w/cpp/language/usual_arithmetic_conversions),  [(49)](https://eel.is/c++draft/expr.arith.conv).
+C++ has counter intuitive, and numerically incorrect, implicit conversion rules [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch).
+A combination of promotions [(50)](https://eel.is/c++draft/conv.prom) and the usual arithmetic conversions [(48)](https://en.cppreference.com/w/cpp/language/usual_arithmetic_conversions),  [(49)](https://eel.is/c++draft/expr.arith.conv).
 This is unfortunate, a compiler error would be better [(68)](https://github.com/ericniebler/stl2/issues/182).
 
 ### Integer Promotions
@@ -363,19 +363,28 @@ The division by `c3` brings the value down into the range of `int8_t` again and 
 This conversion only happens up to the size of `int`.
 If you do the same operations where `c1`, `c2`, and `c3` are all `int` and the initial values chosen so that the `c1 * c2` multiplication overflows then your application is toast, as you have invoked undefined behavior.
 
+Integer promotion doesn't require two operands, it applies also to unary operators as well.
+Consider
+```cpp
+uint8_t a = 1; // 0000'0001.
+~a; // We might think this is 1111'1110.
+    // But it is actually 1111'1111'1111'1111'1111'1111'1111'1110.
+```
+
+
 ### Usual Arithmetic Conversions
 
 Arithmetic operations are always performed on two values of equal type [(49)](https://eel.is/c++draft/expr.arith.conv).
 If two different types are passed to an operator then they are converted to a common type.
 This process is called the usual arithmetic conversions.
-There are many steps involved in deciding which type to use, but in short:
+There are many steps involved in deciding which type to use, but for our discussion it can be summarized as:
 - The widest type wins.
 - If they are the same width, then unsigned wins.
 
 If you multiply an `int` and an `int64_t` then the computation will be performed using `int64_t`.
 If you multiply an `int` and an `unsigned int` then the computation will be performed using `unsigned int`.
 This can wreck havoc with your application since the usual arithmetic conversions happens not only for addition and multiplication and such, but also for comparison operators.
-That is, -1 is greater than 1 if 1 is unsigned [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
+That is, -1 is greater than 1 if 1 is unsigned [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/), [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch).
 ```cpp
 int small = -1
 unsigned int large = 1;
@@ -386,18 +395,10 @@ if (small < large)
 }
 ```
 
-The usual arithmetic conversions don't require two operands, it applies also to unary operators.
-Consider
-```cpp
-uint8_t a = 1; // 0000'0001.
-~a; // We might think this is 1111'1110.
-    // But it is actually 1111'1111'1111'1111'1111'1111'1111'1110.
-```
-
 Another example [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned):
 ```cpp
-int revenue = -5;            // can be negative when loss, so signed
-unsigned int taxRefund = 3;  // cannot be negative, so unsigned
+int revenue = -5;            // Can be negative when loss, so signed.
+unsigned int taxRefund = 3;  // Cannot be negative, so unsigned.
 cout << "total earnings: " << revenue + taxRefund << endl;
 ```
 Output:
@@ -736,10 +737,16 @@ When using singed `integer_t` the range check in `work` should check both sides:
 if (index < 0 || index >= data.size())
 ```
 
-[Some say](https://www.reddit.com/r/cpp_questions/comments/1ehc50j/comment/lfymu23/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button) , including the C++ Core Guidelines [(3)](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es102-use-signed-types-for-arithmetic) that this is not a problem, that we should pass `-Wno-sign-conversion` to the compiler, ignore the problem, and hope that it never happens.
+[Some say](https://www.reddit.com/r/cpp_questions/comments/1ehc50j/comment/lfymu23/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button) , including the C++ Core Guidelines [(3)](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es102-use-signed-types-for-arithmetic), that this is not a problem, that we should pass `-Wno-sign-conversion` to the compiler, ignore the problem, and hope that it never happens.
 This is OK if we take care to never let a negative value be converted to an unsigned integer type.
 I don't know how to ensure that.
 I would prefer to keep the sign-conversion warning enabled, but I'm not sure that is realistic with an signed `integer_t` type.
+
+A problem with implicit conversion warnings is that it is not unusual that programmers try to fix them without understand the details of the code and the implication of a change [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch).
+Difficult to give an example because the issues tend to happen in larger non-trivial codes.
+A real world case was pieces of code from `unrar` being incorporated into Windows Defender, but with signed integers changed to unsigned which caused a security vulnerability [(72)](https://www.theregister.com/2018/04/04/microsoft_windows_defender_rar_bug/).
+A guideline is to never add a cast just because the compiler says so.
+If you do add a cast from signed to unsigned then also add a check for non-negativity.
 
 ## Changing The Type Of A Variable Or Return Value
 
@@ -3277,6 +3284,7 @@ Don't use unsigned when you need:
 - compare magnitudes [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
 
 Build with `-Wconversion`.
+Use a library for sane signed+unsigned comparisons [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch), [(71)](https://en.cppreference.com/w/cpp/utility/intcmp).
 
 Use a signed type and use one with more range than you think you need [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 Then most of the disadvantages of signed integers are removed.
@@ -3468,3 +3476,7 @@ I should make a list here.
 - 67: [Comment on _Unsigned integers, and why to avoid them_ by faskldj 2020](https://www.learncpp.com/cpp-tutorial/unsigned-integers-and-why-to-avoid-them/#comment-474548)
 - 68: [_Kill unsigned integers throughtout STL2_ by Eric Nieler @ github.com/ericniebler](https://github.com/ericniebler/stl2/issues/182)
 - 69: [_Use unsigned integers instead of signed integers where appropriate_ by Johannes Vollmer @ github.com/kryptan/rect_packer et. al. 2019](https://github.com/kryptan/rect_packer/issues/3)
+- 70: [_C++: Thoughts on Dealing with Signed/Unsigned Mismatch_ by "No Bugs" Hare @ ithare.com 2018](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch/)
+- 71: [_std::cmp_equal, cmp_not_equal, cmp_less, cmp_greater, cmp_less_equal, cmp_greater_equal_ @ cppreference.com](https://en.cppreference.com/w/cpp/utility/intcmp)
+- 72: [_They forked this one up: Microsoft modifies open-source code, blows hole in Windows Defender_ by Shaun Nichols @ theregister.com 2018](https://www.theregister.com/2018/04/04/microsoft_windows_defender_rar_bug/)
+
