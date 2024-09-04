@@ -1113,7 +1113,7 @@ These are both easy to detect in testing.
 
 ## More Compiler Optimization Opportunities In Some Cases
 
-For example when an expression contains a division or reminder by a power of two [(73)](https://news.ycombinator.com/item?id=2364065).
+For example when an expression contains a division or reminder by a power of two [(73)](https://news.ycombinator.com/item?id=2364065), [(74)](https://www.linkedin.com/pulse/int-uint-question-alex-dathskovsky-).
 ```cpp
 __attribute((noinline))
 int mod(int b)
@@ -2428,6 +2428,76 @@ BENCHMARK(SumSizeUInt);
 ```
 
 
+If the compiler can know that a variable will not overflow because it is a signed integer then it can apply optimizations that depend on regular repeated arithmetic operations behave "as expected" [(74)](https://www.linkedin.com/pulse/int-uint-question-alex-dathskovsky-).
+With unsigned integers that is not possible since the value is allowed to wrap, wrecking havoc with any numerical analysis.
+Here is an example of a loop that has a closed form solution if we know that all operations will be performed "as expected".
+```cpp
+
+__attribute((noinline))
+std::ptrdiff_t sum_range(std::ptrdiff_t n)
+{
+    std::ptrdiff_t sum {0};
+    for (std::ptrdiff_t i = 1; i <= n; ++i)
+    {
+        sum += i;
+    }
+    return sum;
+}
+
+__attribute((noinline))
+std::size_t sum_range(std::size_t n)
+{
+    std::size_t sum {0};
+    for (std::size_t i = 1; i <= n; ++i)
+    {
+        sum += i;
+    }
+    return sum;
+}
+```
+
+```S
+sum_range(long):
+        testq   %rdi, %rdi
+        jle     .LBB50_1
+        leaq    -1(%rdi), %rax
+        leaq    -2(%rdi), %rcx
+        mulq    %rcx
+        shldq   $63, %rax, %rdx
+        leaq    (%rdx,%rdi,2), %rax
+        decq    %rax
+        retq
+.LBB50_1:
+        xorl    %eax, %eax
+        retq
+
+sum_range(unsigned long):
+        testq   %rdi, %rdi
+        je      .LBB51_1
+        incq    %rdi
+        cmpq    $3, %rdi
+        movl    $2, %ecx
+        cmovaeq %rdi, %rcx
+        leaq    -2(%rcx), %rax
+        leaq    -3(%rcx), %rdx
+        mulq    %rdx
+        shldq   $63, %rax, %rdx
+        leaq    (%rdx,%rcx,2), %rax
+        addq    $-3, %rax
+        retq
+.LBB51_1:
+        xorl    %eax, %eax
+        retq
+```
+
+(
+The unsigned variant doesn't get a loop anymore, which it used to [(74)](https://www.linkedin.com/pulse/int-uint-question-alex-dathskovsky-).
+Not sure what changed.
+More analysis needed.
+Clang 13 produces a loop, but Clang 14 does not.
+How does the non-loop variant work?
+)
+
 
 Though there are some cases where unsigned provides better optimization opportunities.
 For example division [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
@@ -3556,5 +3626,5 @@ I should make a list here.
 - 70: [_C++: Thoughts on Dealing with Signed/Unsigned Mismatch_ by "No Bugs" Hare @ ithare.com 2018](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch/)
 - 71: [_std::cmp_equal, cmp_not_equal, cmp_less, cmp_greater, cmp_less_equal, cmp_greater_equal_ @ cppreference.com](https://en.cppreference.com/w/cpp/utility/intcmp)
 - 72: [_They forked this one up: Microsoft modifies open-source code, blows hole in Windows Defender_ by Shaun Nichols @ theregister.com 2018](https://www.theregister.com/2018/04/04/microsoft_windows_defender_rar_bug/)
-
 - 73: [_A fifteen year old TCP bug?_ comments @ news.ycombinator.com 2011](https://news.ycombinator.com/item?id=2364065)
+- 74: [_To Int or To UInt, This Is The Question_ by Alex Dathskovsky @ linkedin.com 2022](https://www.linkedin.com/pulse/int-uint-question-alex-dathskovsky-)
