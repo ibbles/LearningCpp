@@ -260,6 +260,11 @@ We can have different priorities when making this decision, and put different we
 TODO For each advantage / disadvantage describe how it affects the priorities listed above.
 )
 
+We want to help the compiler help us.
+If one choice makes it possible for the compiler to identify more of our mistakes than that is a point in favor of that choice.
+The idea is the same as using `const` as much as possible [(73)](https://news.ycombinator.com/item?id=2364065).
+Programmers do plenty of dumb mistakes, it is better if those can be found quickly in the IDE rather than during testing or even worse by the users.
+
 In this note `integer_t` is an integer type that is an alias for either `std::size_t` or `std::ptrdiff_t` depending on if we use signed or unsigned indexing.
 `std::size_t` is an unsigned integer large enough to hold the size of any object,
 including heap allocated buffers.
@@ -1000,7 +1005,7 @@ That is why the index type `std::size_t` is unsigned and the signed torsor varia
 
 ## Makes Invalid Values Unrepresentable
 
-Restricting what values can be passed to a function through the type system is a good way to communicate how the function is meant to be used to both programmers and the compiler [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+Restricting what values can be passed to a function through the type system is a good way to communicate how the function is meant to be used to both programmers and the compiler [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU), [(73)](https://news.ycombinator.com/item?id=2364065).
 It simplifies the written documentation required.
 
 At least it would be good if we didn't have implicit signed → unsigned conversions [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
@@ -1108,7 +1113,41 @@ These are both easy to detect in testing.
 
 ## More Compiler Optimization Opportunities In Some Cases
 
-For example when an expression contains a division by a power of two.
+For example when an expression contains a division or reminder by a power of two [(73)](https://news.ycombinator.com/item?id=2364065).
+```cpp
+__attribute((noinline))
+int mod(int b)
+{
+    return b % 16;
+}
+
+__attribute((noinline))
+int mod(unsigned b)
+{
+    return b % 16;
+}
+```
+
+Clang 18.1 produces
+```S
+mod(int):
+        movl    %edi, %eax
+        leal    15(%rax), %ecx
+        testl   %edi, %edi
+        cmovnsl %edi, %ecx
+        andl    $-16, %ecx
+        subl    %ecx, %eax
+        retq
+
+mod(unsigned int):
+        movl    %edi, %eax
+        andl    $15, %eax
+        retq
+```
+
+The signed version has a lot more instructions in order to handle the cases where `b` is negative.
+
+Slightly more complicated example:
 ```cpp
 __attribute((noinline))
 int32_t wrap_optimization_test(uint32_t b)
@@ -1148,6 +1187,7 @@ wrap_optimization_test(int):
         retq
 ```
 
+The unsigned version contains fewer instructions because division by a power of two is a single shift-right with unsigned integers, while with signed integers it requires some additional work.
 
 ## Easier To Write Code That Is Correct For All Input
 
@@ -1502,6 +1542,7 @@ In some cases the index computation may produce intermediate negative values.
 This is OK as long as we ultimately end up with a positive value being passed to `operator[]`.
 This works with unsigned integers as long as the computation only involves operations that work as intended under modular arithmetic, e.g. additions, subtractions and multiplications [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java).
 Not division and reminder.
+Also, for unsigned it is required that all variables have the same bit-width, since the usual arithmetic conversions don't do sign-extension for unsigned integers [(73)](https://news.ycombinator.com/item?id=2364065).
 The modular arithmetic ensures that the correct number of steps is taken in both directions regardless of any wrapping at either side.
 It may make debugging more difficult since printing values won't show the "semantically correct" value but instead the wrapped value.
 However, if we do divides on a supposedly negative, but actually very large, values then we will get an incorrect result.
@@ -2617,7 +2658,7 @@ The above does not work when the container is empty  since `container.size()`
 
 ## Impossible To Reliably Detect Underflow
 
-It is impossible to detect earlier arithmetic underflow, other than with heuristics [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned), [(62)](https://news.ycombinator.com/item?id=29766658).
+It is impossible to detect earlier arithmetic underflow, other than with heuristics [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned), [(62)](https://news.ycombinator.com/item?id=29766658), [(73)](https://news.ycombinator.com/item?id=2364065).
 By the time we get to the `work` function the damage has already been done and it is difficult to track down where it occurred.
 This is a common source of vulnerabilities and memory safety issues  [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 By using an unsigned integer type for a parameter a programmer may believe they are protected from negative inputs.
@@ -2955,6 +2996,16 @@ If there is no valid index, i.e. the container is empty, then `index` is initial
 But that's OK since we never enter the loop body.
 The invalid index is never used.
 
+Another variant is to use an if-statement and a do-while loop instead [(73)](https://news.ycombinator.com/item?id=2364065):
+```cpp
+if (count > 0) {
+    unsigned i = count - 1;
+    do {
+	    /* body */
+    } while (i-- != 0);
+}
+```
+
 ## Forced To Mix Signed And Unsigned
 
 Some data is inherently signed.
@@ -3004,6 +3055,20 @@ void work(Container& container)
 I'm not sure if it is legal to cast a `std::size_t` larger than the largest `std::ptrdiff_t` to a `std::ptrdiff_t`, or if that is undefined behavior.
 In practice, it is often converted to a negative value, which is what the bit pattern would represent in the signed type since the most significant bit is set and most machines uses two's complement to represent signed integers.
 This would cause immediate termination of the loop if we didn't have the size guard [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
+
+Example where a range check mistake causes an unexpected value to be used as a signed integer is passed to a function taking an unsigned parameter [(73)](https://news.ycombinator.com/item?id=2364065):
+```cpp
+int size = /* Some value. */;
+char buffer[10];
+if (size <= 10) {
+    // Yay, I have plenty of space.
+    memcpy(buffer, src, size);
+}
+```
+
+Unclear how making `size` be a signed type would help us though.
+If the computation of `size` produced a negative value when using a signed `size` then the same expression using unsigned integers instead would produce the same very large value as the signed `size` is implicitly converted to.
+We gain nothing, but we lose the ability to check for a negative size.
 
 The C++ Core Guidelines are conflicted on this issue.
 [ES.100](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es100-dont-mix-signed-and-unsigned-arithmetic) says that we should not mix signed and unsigned integers and [ES.102](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es102-use-signed-types-for-arithmetic) says that we should use signed integers for indices.
@@ -3065,6 +3130,18 @@ if (index < 0 || index >= container.size())
 
 Fewer comparisons are not worth the huge risk of the programmer doing mixed-type arithmetic/comparisons/conversions incorrectly.
 It’s better to be just a little more verbose than to have subtle bugs hiding implicitly in the code [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java).
+
+Example showing now easy it is to get wrong.
+A range check mistake causes an unexpected value to be used as a signed integer is passed to a function taking an unsigned parameter [(73)](https://news.ycombinator.com/item?id=2364065):
+```cpp
+int size = /* Some value. */;
+char buffer[10];
+if (size <= 10) {
+    // Yay, I have plenty of space.
+    memcpy(buffer, src, size);
+}
+```
+
 
 A suggestion [(21)](https://internals.rust-lang.org/t/subscripts-and-sizes-should-be-signed/17699) to test signed integers with a single comparison is to cast it to unsigned.
 
@@ -3480,3 +3557,4 @@ I should make a list here.
 - 71: [_std::cmp_equal, cmp_not_equal, cmp_less, cmp_greater, cmp_less_equal, cmp_greater_equal_ @ cppreference.com](https://en.cppreference.com/w/cpp/utility/intcmp)
 - 72: [_They forked this one up: Microsoft modifies open-source code, blows hole in Windows Defender_ by Shaun Nichols @ theregister.com 2018](https://www.theregister.com/2018/04/04/microsoft_windows_defender_rar_bug/)
 
+- 73: [_A fifteen year old TCP bug?_ comments @ news.ycombinator.com 2011](https://news.ycombinator.com/item?id=2364065)
