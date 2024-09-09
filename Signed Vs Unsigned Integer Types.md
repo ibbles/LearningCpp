@@ -1,3 +1,8 @@
+Continue at https://youtu.be/82jVpEmAEV4?t=2339
+
+
+
+
 
 (
 TODO
@@ -216,6 +221,8 @@ void work(std::ptrdiff_t v1, std::ptrdiff_t v2)
 	std::ptrdiff_t distance = std::abs(v1 - v2);
 ```
 )
+
+
 
 
 The purpose of this note is to evaluate the advantages and disadvantages of using signed or unsigned integers, mainly for indexing operations.
@@ -2499,6 +2506,72 @@ How does the non-loop variant work?
 )
 
 
+
+
+What happens when we multiply a value by some constant and then divide by that same c constant [(75)](https://youtu.be/82jVpEmAEV4?t=696)?
+The mathematical result is that the multiply and the divide cancels out and we get back the original value.
+This is not the case with limited precision numbers since the multiply may overflow or wrap, causing the number we then divide not actually being the expected multiple of the original value.
+For unsigned integers this is well defined behavior and the standard specifies what the result of the multiplication and the following division should be.
+We may therefore get a value smaller than we expect.
+For signed values we as programmers must guarantee that the multiplication doesn't overflow since that would be undefined behavior.
+We are therefore guaranteed that, for any valid program, we will get back the original value.
+The compiler may optimize based on this, meaning that the multiplication and division may be removed.
+
+Example using the constant 7 and `INT_MAX` for the value.
+```cpp
+volatile int si1 = INT_MAX;
+volatile unsigned int ui1 = INT_MAX;
+printf("si1 * 7 / 7 = %d\n", si1 * 7 / 7);
+printf("ui1 * 7 / 7 = %d\n", ui1 * 7 / 7);
+```
+The `si1 * 7`computation will overflow and since `si1` is a signed integer this is undefined behavior.
+This means that the compiler is allowed to do anything.
+For example, it can chose to look at the `7 / 7` part and simplify that away.
+So the value printed may be `INT_MAX`.
+It may print anything else, doesn't have to be a number, or nothing at all.
+Or the program may do something completely different, all bets are off.
+Don't do this, not even accidentally.
+Undefined behavior is bad.
+
+The `ui1 * 7` computation will wrap and the compiler is required to follow that.
+In this case, where all values are know at compile time, the compile can precompute the value, but if the value was unknown at compile time then the compiler would be required to put in the multiplication and the division.
+
+Compiled with Clang 18.1.
+```cpp
+__attribute((noinline))
+unsigned useless(int value)
+{
+    return value * 7 / 7;
+}
+
+__attribute((noinline))
+unsigned useless(unsigned int value)
+{
+    return value * 7 / 7;
+}
+```
+
+```S
+useless(int):
+        movl    %edi, %eax
+        retq
+
+useless(unsigned int):
+        leal    (,%rdi,8), %eax
+        subl    %edi, %eax
+        imulq   $613566757, %rax, %rcx
+        shrq    $32, %rcx
+        subl    %ecx, %eax
+        shrl    %eax
+        addl    %ecx, %eax
+        shrl    $2, %eax
+        retq
+```
+
+
+
+
+
 Though there are some cases where unsigned provides better optimization opportunities.
 For example division [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
 See _Advantages Of Unsigned_ > _More Compiler Optimization Opportunities In Some Cases_.
@@ -2564,22 +2637,24 @@ See
 
 E.g.
 ```cpp
-void work(Container& container, T key)
+bool work(Container& container, T key)
 {
 	std::ptrdiff_t index = find(container, key);
 	if (index < 0)
 	{
-		// switch block with a bunch of negateive cases.
-		return;
+		// Switch block with a bunch of negative cases,
+		// one for each possible error code.
+		return false;
 	}
 
 	// Work on container[index].
+	return true;
 }
 ```
 
 I don't like this much.
 It overloads the semantics of the return value of `find`.
-Better to keep the error reporting separate.
+Better to keep the error reporting separate, instead of in-band [(75)](https://youtu.be/82jVpEmAEV4?t=2150).
 Either with an output parameter, returning a tuple or a struct, returning an optional (when we don't need multiple error values), or `std::expected`.
 
 # Disadvantages Of Unsigned
@@ -3628,3 +3703,4 @@ I should make a list here.
 - 72: [_They forked this one up: Microsoft modifies open-source code, blows hole in Windows Defender_ by Shaun Nichols @ theregister.com 2018](https://www.theregister.com/2018/04/04/microsoft_windows_defender_rar_bug/)
 - 73: [_A fifteen year old TCP bug?_ comments @ news.ycombinator.com 2011](https://news.ycombinator.com/item?id=2364065)
 - 74: [_To Int or To UInt, This Is The Question_ by Alex Dathskovsky @ linkedin.com 2022](https://www.linkedin.com/pulse/int-uint-question-alex-dathskovsky-)
+- 75: [_Integer Type Selection in C++: in Safe, Secure and Correct Code - Robert Seacord - CppNow 2023_ by Rober Seacord, CppNow @ youtube.com 2023](https://www.youtube.com/watch?v=82jVpEmAEV4)
