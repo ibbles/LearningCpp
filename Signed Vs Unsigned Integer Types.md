@@ -2,74 +2,78 @@
 
 C++ provides two families of integer types: signed and unsigned.
 This means that every time we need a variable or constant of integer type we also need to chose if it should be signed or unsigned.
-The purpose of this note is to discuss reasons for choosing one or the other, to evaluate the advantages and disadvantages of using signed or unsigned integers.
-Neither option is obviously better than the other and both comes with their own problems.
+The purpose of this note is to discuss reasons for choosing one type or the other, to evaluate the advantages and disadvantages of using signed or unsigned integers.
+Neither option is obviously better than the other and both comes with their own set of problems.
 Either variant can be used and all problematic code snippets presented here can be fixed regardless of the type used.
 We can always blame "bad code" on "bad programmers", but systematic decisions should be done with (TODO Text here describing local vs global decisions and repeated errors.)
 
-The purpose for this note is to explore the pros and cons of using each in cases where it is not obvious, such as for indices and sizes.
+The purpose for this note is to explore the pros and cons of using each in cases where it is not obvious which one we should use, such as for indices and sizes.
 There is no universally agreed upon choice.
 
 The basis for the evaluation is that code should be clear and obvious.
-The straight-forward way to write something should not produce unexpected or incorrect behavior.
+The straight-forward way to write something should not produce incorrect results or unexpected behavior.
 If what the code says, or at least implies after a quick glance, isn't what the code actually does then there is a deeper problem than just "bad code, bad programmer".
-We are not content with having the code being correct when we first check it in, we also want it to remain correct through multiple rounds of modifications by multiple people.
+We are not content with having the code being correct when we first check it in, we also want it to remain correct through multiple rounds of modification and extension by multiple people.
 Real-world programmers writing real-world programs tend to have other concerns in mind than the minutiae of implicit integer conversion rules and overflow semantics.
-What we want to do is reduce the number of ways things can go wrong, reduce the fallout of an errant process, and minimize cognitive load to reduce bugs overall.
-We want to determine which choice leads to errors that are more common, more dire consequences, which are going to be harder to find.
-We want tools, language and compiler included, that help us prevent errors.
+What we want to do is reduce the number of ways things can go wrong, mitigate the bad effects when something does go wrong, and minimize the cognitive load to reduce bugs overall.
+We want to determine which choice leads to errors that are more common, have more dire consequences, and which are going to be harder to identify when they happen.
+We want tools; language and compiler included, that help us prevent errors.
 We want to help the compiler help us.
-If one choice makes it possible for the compiler to identify more of our mistakes than that is a point in favor of that choice.
+If one choice makes it possible for the compiler to identify more of our mistakes then that is a point in favor of that choice.
+If one choice puts a larger responsibility on the programmer to eliminate edge cases then that is a point against the choice.
 The idea is the same as using `const` as much as possible.
-Programmers do plenty of dumb mistakes, it is better if those can be found quickly in the IDE rather than during testing or even worse by the users.
+Programmers do plenty of dumb mistakes, it is better if those can be found quickly in the IDE rather than during testing or, even worse, by the users.
 
-We can have different priorities when making this decision, and put different importance on each from project to project.
+We can have different priorities when deciding between using signed or unsigned integers, and put different importance on each priority from project to project.
 - Robustness: It should be difficult to write bugs and easy to identify them when they happen.
-- Readability: The code should makes sense, whatever that means.
+- Readability: The code should make sense, whatever that means.
 - Runtime performance: The code should execute as fast as possible.
 - Memory usage: Always use the smallest type possible.
 - Avoid undefined behavior.
 - Undefined behavior on error: It is diagnosable with an undefined behavior sanitizer.
 	- Though being undefined behavior means the compiler may do unexpected transformations to our code, meaning that the overflow might not actually happen at runtime. Instead the application does something completely different.
 
-
-We assume a 64-bit machine with 32-bit `int`.
-Some results are different on other machines.
-
+There is a fundamental difference in mindset between an application that should keep going and do its best despite detected errors, and an application where an incorrect result is fatal and it is much preferable to terminate early and in an obvious way [(80)](https://www.martinfowler.com/ieeeSoftware/failFast.pdf). Do we want to detect and handle errors as best as we can and let the application keep running, or should errors lead to obvious incorrect application behavior such as a crash, infinite loop, failed assert, or similar. An obvious error means we can fix our code, but may lead to brittle software and unsatisfied users.
 
 # Integer Basics
 
+## Limited Range
+
 Fixed sized integer types, which all primitive integer types are, have the drawback that they can only represent a limited range of values.
 When we try to use them outside of that range they wrap, trap, saturate, or trigger undefined behavior.
-Unsigned integers wrap while signed integer trigger undefined behavior.
-In most cases none of these produce the result we intended and often lead to security vulnerabilities, with the exception being algorithms that explicitly need wrapping behavior such as some encryption algorithms.
+Typically, unsigned integers wrap while signed integer trigger undefined behavior.
+In most cases neither of these produce the result we intended and often lead to bugs and / or security vulnerabilities, with the exception being algorithms that explicitly need wrapping behavior such as some encryption algorithms.
 A signed integer type is one that can represent both positive and negative numbers, and zero.
 An unsigned integer is one that can only represent positive numbers, including zero.
 This means that a signed and an unsigned integer of the same have some, but not all, values in common.
 For each integer size we can split the range into three segments.
-For `int` and `unsigned int`:
+Example using `int` and `unsigned int`:
 - `INT_MIN` to -1: Only representable by `int`.
 - 0 to `INT_MAX`: Representable by both `int` and `unsigned int`.
 - `INT_MAX` + 1 to `UINT_MAX`: Only representable by `unsigned int`.
 
-C++ provides the integer types `char`, `short`, `int`, `long`, and `long long`, and an unsigned variant for each.
-The all have an implementation defined sized and the unsigned variant is always the same size as the corresponding signed type.
-`char` is a bit special in that there are three `char` types (`char`, `signed char`, and `unsigned char`.) and it is always 1 byte in size.
+## Integer Sizes
+
+C++ provides the integer types `char`, `short`, `int`, `long`, and `long long`, and an unsigned variant of each.
+They all have an implementation defined sized and the unsigned variant is always the same size as the corresponding signed type.
+`char` is a bit special in that there are three `char` types (`char`, `signed char`, and `unsigned char`) and they are all 1 byte in size.
 There are integer types with fixed size as well: `int8_t`, `int16_t`, `int32_t`, and `int64_`, and an unsigned variant for each.
 These are not separate types from the earlier integer types, but type aliases.
 It is common that `int32_t` and `int` are the same type.
 Another pair of integer types is `size_t` and `ptrdiff_t`.
-These are integer types with implementation defined size such that `size_t` can hold the size of any memory object, including arrays and heap allocated buffers, and `ptrdiff_t` is the result of pointer subtraction.
+These are integer types with an implementation defined size such that `size_t` can hold the size of any memory object, including arrays and heap allocated buffers, and `ptrdiff_t` is the result of pointer subtraction.
 It is common for `size_t` and `ptrdiff_t` to be the same size.
 In that case `size_t` can hold larger positive values than `ptrdiff_t` can.
 This means that there are memory objects so large, i.e. upper half of the range of `size_t` in size, that `ptrdiff_t` doesn't have enough range to represent the difference between two pointers pointing to the far ends of the object.
 That is a problem and trying compute such a difference is undefined behavior.
 ```cpp
-size_t size = static_cast<size_t>(PTRDIFF_MAX) + 10;
-char* memory = malloc(size);
-char* end = memory + size;
-ptrdiff_t size = end - memory; // Undefined behavior.
+size_t const size = static_cast<size_t>(PTRDIFF_MAX) + 10;
+char const* const memory = malloc(size);
+char const* const end = memory + size;
+ptrdiff_t const size = end - memory; // Undefined behavior.
 ```
+
+## Integer Behavior
 
 Choosing either a signed or unsigned integer types comes with a number properties of the declared constant or variable.
 A problem is that signed and unsigned expresses multiple properties and it is not always possible to get the exact combination that we want.
@@ -77,6 +81,8 @@ A problem is that signed and unsigned expresses multiple properties and it is no
 - Value may only be positive.
 - Value can be negative.
 - Over / underflow not possible / not allowed.
+
+## Implicit Type Conversions
 
 Arithmetic operations are always performed with a single type.
 If the operator is not a unary operator and the operands doesn't have the same type then one of them will be converted to the type of the other.
@@ -88,14 +94,20 @@ The rules for this is non-trivial, but for this note we simplify it to the follo
 All operations are performed on at least the sizeof the `int` type, so if any value has a type smaller than that then it is converted to `int` before evaluating the operator.
 This is called integer promotion.
 
+## Illegal Operations
+
 Some operations are illegal.
 - Division by zero.
+	- The integer types doesn't have a value representing infinity or NaN.
 - Shift by more than the bit width.
+- Multiplying or dividing (I think) the smallest signed integer by  -1.
+	- Because the range of negative values is larger than the range of positive values. The smallest negative value doesn't have a corresponding positive value.
+	- (So why is only multiply and divide illegal? Why not also unary minus? Or is that also illegal?)
 - Multiplying two unsigned integers with size smaller than `int` with a result out of range for `int`.
 	- This is because integers smaller than `int` are promoted to `int` before use, which means that the operation is subjected to all the limitations of signed integer arithmetic, including overflow being undefined behavior. This is problematic with multiplication because, on a platform where `int` is 32-bit, there are `uint16_t` values that when multiplied produces a result larger than `std::numeric_limits<int>::max`, and thus overflow, and thus undefined behavior.
 
-# Standard Library
 
+# Standard Library
 
 Many containers in the standard library use `size_t`, which is an unsigned type, for indexing and counts.
 I assume that the standard library designers know what they are doing.
@@ -126,6 +138,9 @@ If you want bounds checking in release builds then use `at` instead of `operator
 # Note Conventions
 
 While not guaranteed by the standard, it is assumed that `size_t` and `ptrdiff_t` have the same size.
+
+We assume a 64-bit machine, i.e. 64-bit `intptr_t`, `size_t` and `ptrdiff_t`, with 32-bit `int`.
+Some results are different on other machines.
 
 In this note `integer_t` is an integer type that is an alias for either `size_t` or `ptrdiff_t` depending on if we use signed or unsigned indexing.
 
@@ -371,7 +386,7 @@ This chapter lists some common operations we may want to perform without going i
 
 - Loop over container.
 - Test if an index is valid for a container.
-- Compute an index.
+- Compute an index with a non-trivial expression.
 - Loop over container backwards.
 - Detecting error states.
 
@@ -429,6 +444,26 @@ bool isValidIndex(const Container& container, std::ptrdiff_t index)
 	}
 
 	return index < std::ssize(container);
+}
+```
+
+
+# Compute An Index With A Non-Trivial Expression
+
+Not all functions simply loop over a container, sometimes we need to do non-trivial arithmetic to compute the next index.
+This chapter contains a few examples of such cases.
+
+## Midpoint, i.e. "Nearly All Binary Searches Are Broken"
+
+A step in many algorithms involves finding the midpoint of an index range.
+This is used during binary search, merge sort, and many other divide-and-conqueror algorithms [(61)](https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/) [(25)](https://graphitemaster.github.io/aau/).
+The classical, but broken, implementation is as follows.
+```cpp
+integer_t search(Container<T>& container, T key, integer_t low, integer_t high)
+{
+	integer_t mid = (low + high) / 2;
+	
+	// Check if container[mid] is less than, equal to, or larger than key.
 }
 ```
 
@@ -652,3 +687,6 @@ I should make a list here.
 - 76: [_Keynote: Safety and Security: The Future of C and C++ - Robert Seacord. - NDC TechTown 2023_ by Rober Seacord, NDC Conferences @ youtube.com 2023](https://www.youtube.com/watch?v=DRgoEKrTxXY)
 - 77: [_C compilers may silently discard some wraparound checks_ by Chad R Dougherty,  Robert C Seacord @ kb.cert.org 2008](https://www.kb.cert.org/vuls/id/162289/)
 - 78: [_Does size_t have the same size and alignment as ptrdiff_t?_ by cigien, Nathan Oliver, Bathsheba, et.al. @ stackoverflow.com 2020](https://stackoverflow.com/questions/61935876/does-size-t-have-the-same-size-and-alignment-as-ptrdiff-t)
+- 79: [_What does the expression "Fail Early" mean, and when would you want to do so?_ by Andrew Grimm, Bert F et.al. @ stackoverflow.com 2010](https://stackoverflow.com/questions/2807241/what-does-the-expression-fail-early-mean-and-when-would-you-want-to-do-so)
+- 80: [_Fail Fast_ by Jim Shore @ martinfowler.com 2004](https://www.martinfowler.com/ieeeSoftware/failFast.pdf)
+- 81: [_Fail-fast system_ @ wikipedia.com](https://en.wikipedia.org/wiki/Fail-fast_system)
