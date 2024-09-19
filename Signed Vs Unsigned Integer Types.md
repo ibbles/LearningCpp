@@ -467,6 +467,45 @@ integer_t search(Container<T>& container, T key, integer_t low, integer_t high)
 }
 ```
 
+If we have a large range then the `low + high` part can overflow.
+It doesn't matter if we use signed or unsigned indices, both cases will fail.
+The proposed solution is to use `mid = low + (high - low) / 2` instead.
+This fixes the problem by computing a relative offset, which small, instead of a big sum.
+```cpp
+integer_t search(Container<T>& container, T key, integer_t low, integer_t high)
+{
+	integer_t mid = low + (high - low) / 2;
+
+	// Check if container[mid] is less than, equal to, or larger than key.
+}
+```
+
+If we use signed integers then we can use the sum version if we first convert `low` and `high` to the same-size unsigned integer type, do the arithmetic, and then convert back to the signed type.
+This is not a recommendation, just an observation.
+Since the unsigned type has twice the range it is guaranteed to be able to hold the result of the sum.
+And since we divide by two before converting to signed we are guaranteed to have a value that is in range of the signed integer type.
+So we use the extra space available to unsigned integers as an overflow protection area for the intermediate result, and then return back to signed land.
+```cpp
+std::ptrdiff_t high = /* Something. */;
+std::ptrdiff_t low = /* Something. */;
+std::ptrdiff_t mid =
+	static_cast<std::ptrdiff_t>(
+		(
+			static_cast<std::size_t>(low)
+			+ static_cast<std::size_t>(high)
+		)
+		/ 2u);
+```
+
+So we can "fix" the signed indices variant with this unsigned-hack, but that doesn't really make the signed indices choice better than unsigned integers since every index range that the hack fixes works as intended when using unsigned integers even with the original `(low + high) / 2` code.
+An advantage of the hack is that it will work for all possible container sizes, while with unsigned integers there are container sizes that won't.
+So the dangerous case is prevented at the point where the container is populated instead of in usage code.
+Better to fail early [(80)](https://www.martinfowler.com/ieeeSoftware/failFast.pdf).
+
+The take-away from this example is to avoid adding integers that can be large.
+Try to rewrite the computation, and strive to use offsets instead of absolute values.
+
+
 # Recommendations
 
 What can a programmer do today to avoid as many pitfalls as possible?
