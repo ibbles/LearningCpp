@@ -1,3 +1,6 @@
+This note is a copy of [[Signed Vs Unsigned Integer Types - Source Notes]].
+The intention is to move piece by piece from this note to [[Signed Vs Unsigned Integer Types]] until this note is empty.
+
 (
 TODO
 Find where to put the following, demonstrating that we cannot compute distances between values like normally would when using unsigned integers.
