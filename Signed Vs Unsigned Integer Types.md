@@ -143,11 +143,14 @@ We assume a 64-bit machine, i.e. 64-bit `intptr_t`, `size_t` and `ptrdiff_t`, wi
 Some results are different on other machines.
 
 In this note `integer_t` is an integer type that is an alias for either `size_t` or `ptrdiff_t` depending on if we use signed or unsigned indexing.
+It is used in code snippets where the surrounding text discusses the various ways the code fails with either type.
+The generic `integer_t` code snipped is often followed by a specific `size_t` and / or `ptrdiff_t` snippet with additional checks.
 
-In this note `Container` represents any container type that has `size_t size() const` and `T& operator[](size_t)` member function, for example `std::vector`.
+In this note `Container` represents any container type that has `integer_t size() const` and `T& operator[](integer_t)` member functions, for example `std::vector` for `integer_t = size_t` .
+In many chapters it is assumed that valid indices are in the range `[0, size() - 1]`, any exceptions are explicitly noted.
 
 Many code snippets in this note represent actual work with a vaguely defined function named `work`.
-It often takes a `Contaner` parameter and possible also an index to work on.
+It often takes a `Contaner` parameter and possibly also an index to work on.
 If no index is provided then the function typically loops over the elements of the container.
 The function may have a Boolean return value, if it performs error detection.
 A simple example of a `work` function:
@@ -160,6 +163,7 @@ void work(Container& container)
 	}
 }
 ```
+Many chapters start with a function with a narrow contract [(82)](https://quuxplusone.github.io/blog/2018/04/25/the-lakos-rule/), [(83)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2011/n3279.pdf) returning `void` and ends with one or more functions with a wide contract that returns `bool`.
 
 In this note the words "mathematical results" means the result of an arithmetic operation interpreting all values as being in ℤ, the infinite number line of integers in both directions.
 I know that the ℤ/n ring is also "mathematics" but I don't care, it is not what we usually intend when talking about counts, sizes, and offsets and not the topic if this note.
@@ -268,6 +272,19 @@ We get a very large value because in the addition we mix signed and unsigned.
 The signed value is converted to unsigned and since it is negative we get a very large value.
 In particular, we get a value that is 4 lower than `std::numeric_limits<unsigned int>::max()`.
 Then 3 (`taxRefund`) is added and we end up 1 (4 - 3) away from the max.
+
+An example of an unintended underflow with wrapping and an implicit type conversion with unexpected result is the following [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
+```cpp
+uint32_t a {10};
+uint32_t b {11};
+int64_t c = a - b;
+```
+Here we intended to get the result -1, since we have use the signed `int64_t` type.
+However, we get the value `std::numeric_limits<uint32_t>::max()` instead.
+The problem is that `(a, b)` and `c` has different sizes.
+`a - b` is computed to be a very large 32-bit value that is then widened to the 64-bit type.
+Since `a - b` is an unsigned type no sign bit extension will be performed.
+Had all values been the same size the `c` would have the value -1, as we wanted.
 
 
 ## Integer Wrapping And Over- / Underflow
@@ -453,6 +470,24 @@ bool isValidIndex(const Container& container, std::ptrdiff_t index)
 Not all functions simply loop over a container, sometimes we need to do non-trivial arithmetic to compute the next index.
 This chapter contains a few examples of such cases.
 
+
+## Division In Index Calculation
+
+```cpp
+void work(
+	Container& container,
+	integer_t base_index,
+	Container<std::ptrdiff_t>& byte_offsets,
+	integer_t element_size)
+{
+	for (integer_t byte_offset : byte_offsets)
+	{
+		integer_t index = base_index + (byte_offset / element_size);
+		// Work with container[index].
+	}
+}
+```
+
 ## Midpoint, i.e. "Nearly All Binary Searches Are Broken"
 
 A step in many algorithms involves finding the midpoint of an index range.
@@ -510,13 +545,175 @@ Better to fail early [(80)](https://www.martinfowler.com/ieeeSoftware/failFast.p
 The take-away from this example is to avoid adding integers that can be large.
 Try to rewrite the computation, and strive to use offsets instead of absolute values.
 
+# Iterating Over All But The Last Element
+
+Sometimes we need to visit all but the last element of a container [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+The straight-forward way to write this is
+```cpp
+void work(Container& container)
+{
+	for (integer_t index = 0; index < container.size() - 1; ++index)
+	{
+		// Work with container[index].
+	}
+]
+```
+
+This fails with unsigned integers for empty containers [(68)](https://github.com/ericniebler/stl2/issues/182) while with signed integers it works as intended.
+With unsigned, `container.size() - 1` becomes `0 - 1` which wraps around to a very large number which causes the loop to run too many iterations operating on invalid memory.
+We can fix the empty container case with unsigned integers by checking before starting the loop.
+Being explicit about precondition and handling special cases separately if often a good idea [(68)](https://github.com/ericniebler/stl2/issues/182).
+It forces us to write more straight-forward code with less "trickery", which means that is is easier to understand and easier to get right.
+```cpp
+bool work(Container& container)
+{
+	if (container.empty())
+		return false;
+
+	for (size_t index = 0; index < container.size() - 1; ++index)
+	{
+		// Work with container[index].
+	}
+
+	return true;
+]
+```
+Or we can move the offset to the other side of the comparison:
+```cpp
+void work(Container& container)
+{
+	for (size_t index = 0; index + 1 < container.size(); ++index)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+The guideline is to not use subtraction with unsigned integers.
+Instead use the algebraic rules to rewrite all expressions to use addition instead.
+Not sure if that is always possible.
+(
+TODO Find a counter-example.
+)
+This goes against the guideline in _Midpoint_ since in that case the problem is overflow in the addition of two large numbers, not as here where the problem is an underflow after a subtraction.
+So the actual guideline is actually to eliminate all possibilities of underflow and overflow but that is too vague of a guideline so we need to find more specific formulations.
+In each case we need to consider the range of possible values for all inputs and all intermediate results.
+This is difficult to do correctly every time, especially when editing existing code rather than writing something new.
+
+A signed `integer_t` doesn't save us here if `Container::size()` returns an unsigned integer, such is the case with `std::vector`, since the problem has already happened before the signedness of `integer_t` event comes into play, and even then the implicit conversion rules would convert our signed index to the unsigned type anyway, which is not helpful in this case.
+
+We must either explicitly check for the empty container case or make sure the end-of-range computation is done using a signed type.
+```cpp
+
+// Handle empty container separately before the loop.
+template <typename T>
+bool work(std::vector<T>& container)
+{
+	if (container.empty())
+		return false;
+
+	for (integer_t index = 0; index < container.size() - 1; ++index)
+	{
+		// Work with container[index].
+	}
+
+	return true;
+}
+
+// Use std::ssize instead of .size() to get a signed size.
+template <typename T>
+void work(std::vector<T>& container)
+{
+	for (ptrdiff_t index = 0; index < std::ssize(container) - 1; ++index)
+	{
+		// Work with container[index].
+	}
+}
+
+// Cast the size before the subtraction.
+template <typename T>
+void work(std::vector<T>& container)
+{
+	ptrdiff_t const size = static_cast<ptrdiff_t>(container.size());
+	for (ptrdiff_t index = 0; index < size - 1; ++index)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+For many types, such as `std::vector`, it is safe to cast the unsigned size to a signed integer type of equal size because `std::vector::max_size` will never exceed that, but for other types that may not be the case.
+Then you need to  use the early-out-if-empty variant.
+
+In summary, the initial loop definition works when the container uses signed integers but if it uses unsigned then we must either explicitly check for the empty case or take care to use the size as an unsigned integer instead.
+If the container type supports sizes larger than `std::numeric_limits<ptrdiff_t>::max` then we must explicitly check for the empty case.
+
+
+# Iterating Over A Sub-Range
+
+Sometimes we need to iterate through a subset of the elements of a container, skipping some number of elements at the start and some number of elements at the end [(28)](https://gustedt.wordpress.com/2013/07/15/a-praise-of-size_t-and-other-unsigned-types/).
+This could for example be to SIMD vectorize the bulk of an array computation but we need to skip a few elements at the front to get to the first vector size aligned element, and we need to skip a few at the end because the remaining elements don't evenly divide the vector size.
+The straight-forward way to do this is to initialize the loop counter to the initial skip count and subtract the end skip from the container size.
+
+```cpp
+void work(Container& container, integer_t start_skip, integer_t end_skip)
+{
+	for (integer_t index = start; index < container.size() - end_skip; ++index)
+	{
+		// Work with contianer[index].
+	} 
+}
+```
+
+The above fails for unsigned indices when `end_skip > container.size()` because `container.size() - end_skip` underflows, wraps around, and produces a very large number.
+This is most common with unexpectedly small, maybe empty, containers.
+The resulting behavior is that the loop will visit not only container elements it should visit but also the elements at the end that should be skipped, and then it will overrun the buffer and start operating on invalid memory.
+With this implementation it is the responsibility of the caller to eliminate all such cases.
+We can improve the implementation by first checking that we shouldn't skip the entire loop.
+```cpp
+bool work(Container& container, size_t start_skip, size_t end_skip)
+{
+	if (end_skip > container.size())
+		return false;
+
+	for (integer_t index = start; index < container.size() - end_skip; ++index)
+	{
+		// Work with contianer[index].
+	}
+
+	return true;
+}
+```
+
+With signed indices we don't have this problem since `container.size() - end_skip` will correctly produce a negative value and `index < container.size() - end_skip` will terminate the loop immediately, assuming `start_skip` is positive.
+
+Signed indices will fail to behave correctly if `start_skip` or `end_skip` is negative since that will cause it to index out of bounds of the container.
+So we need to check for that explicitly.
+```cpp
+bool work(Container& container, ptrdiff_t start_skip, ptrdiff_t end_skip)
+{
+	if (start_skip < 0 || end_skip < 0)
+		return false;
+
+	for (ptrdiff_t index = start; index < container.size() - end_skip; ++index)
+	{
+		// Work with container[index].
+	}
+
+	return true;
+}
+```
+
+An integer type that is unsigned but produces signed results in arithmetic expressions, such as `container.size() - end_skip`, would save us as long as `container.size()` is less than the maximum of the signed integer type (I think.).
+
+
 # Things That Often Work
 
 This chapter is a summary of implementations that often work but still have cases we must guard for.
 
 ## Midpoint
 
-See _Midpoint, i.e. "Nearly All Binary Searches Are Broken"_ for details.
+See _Midpoint, i.e. "Midpoint, i.e Nearly All Binary Searches Are Broken"_ for details.
 
 The typical way of finding the middle of an index range is `mid = low + (high - low) / 2;
 This works for all unsigned values (citation/test needed) as long as `low` is less than or equal to `high`, but signed is susceptible to overflow if `high` is large and `low` is negative.
@@ -639,6 +836,7 @@ if (test_cpu_flag(UNDEROVERFLOW_BIT))
 Not sure what the semantics for this type should be.
 - Overflow behavior?
 - Signed or unsigned?
+- Unsigned when declared but signed in arithmetic involving subtraction?
 Should carry valid range information, and do runtime checks to enforce it [(68)](https://github.com/ericniebler/stl2/issues/182).
 
 
@@ -744,3 +942,6 @@ I should make a list here.
 - 79: [_What does the expression "Fail Early" mean, and when would you want to do so?_ by Andrew Grimm, Bert F et.al. @ stackoverflow.com 2010](https://stackoverflow.com/questions/2807241/what-does-the-expression-fail-early-mean-and-when-would-you-want-to-do-so)
 - 80: [_Fail Fast_ by Jim Shore @ martinfowler.com 2004](https://www.martinfowler.com/ieeeSoftware/failFast.pdf)
 - 81: [_Fail-fast system_ @ wikipedia.com](https://en.wikipedia.org/wiki/Fail-fast_system)
+- 82: [_The Lakos Rule_ by Arthur O'Dwyer @ quuxplueone.github.io 2018](https://quuxplusone.github.io/blog/2018/04/25/the-lakos-rule/)
+- 83: [_Conservative use of noexcept in the Library_ by Alisdair Meredith, John Lakos @ open-std.org 2011](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2011/n3279.pdf)
+
