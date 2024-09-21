@@ -707,9 +707,88 @@ bool work(Container& container, ptrdiff_t start_skip, ptrdiff_t end_skip)
 An integer type that is unsigned but produces signed results in arithmetic expressions, such as `container.size() - end_skip`, would save us as long as `container.size()` is less than the maximum of the signed integer type (I think.).
 
 
+# Computing Distance Between Indices
+
+We cannot compute distances between values like we normally would when using unsigned integers.
+This looks like it would give us the distance between `start` and `end`, and in some theoretical sense it does, but it doesn't give the shortest distance and the `std::abs` will trigger a compiler error [(32)](https://stackoverflow.com/questions/47283449/should-signed-or-unsigned-integers-be-used-for-sizes).
+```cpp
+void work(size_t start, size_t end)
+{
+	size_t distance = std::abs(end - start);
+}
+```
+
+Beware that the computation may be hidden behind a function template defined elsewhere.
+```cpp
+// Math.hpp:
+template <typename T>
+T calculate_distance(T start, T end)
+{
+	return std::abs(end - start);
+}
+
+// Work.cpp:
+void work(size_t start, size_t end)
+{
+	size_t distance = calculate_distance(start, end);
+}
+```
+
+The problem is that `end - start`, with unsigned `start` and `end`, produces an unsigned result.
+If `start > end` then we wrap around and get a very large positive value.
+Which is correct, in the sense that if we start at `start` and walk in the positive direction then it will take a great many steps to reach `end`.
+We get the distance from `start` to `end` if we start walking in the direction away from `end`, hit the upper bound, wrapped back down to zero, and finally continued on to `end`.
+This is probably not what was intended.
+The `std::abs` doesn't save us because by the time the argument has been computed we already have a too large value, since the expression cannot ever be negative.
+Also, `std::abs` doesn't make any sense for an unsigned type since if we were to implement it it would be the identity function.
+For this reason the standard library designers opted to not provide that overload,
+giving a compiler error to inform us that we are probably not doing what we thing we are doing.
+
+This is an example where blindly adding casts is a bad idea.
+The following fixes the compiler error but we do not get the result we wanted.
+```cpp
+template <typename T>
+std::make_signed_t<T> calculate_distance(T start, T end)
+{
+	return std::abs(std::make_signed_t<T>(end - start));
+}
+```
+
+The following works for values that aren't too larger for the signed type,
+but this code does not sit well with me.
+```cpp
+template <typename T>
+std::make_signed_t<T> calculate_distance(T start, T end)
+{
+	using SignedT = std::make_signed_t<T>;
+	SignedT const signed_start = static_cast<SignedT>(start);
+	SignedT const signed_end = static_cast<SignedT>(end);
+	return std::abs(signed_end - signed_start);
+}
+```
+
+
+One way to correctly compute the distance where we know that the type is unsigned is
+```cpp
+void work(size_t start, size_t end)
+{
+	size_t const distance = std::max(start, end) - std::min(start, end);
+}
+```
+
+With signed integers the original computation works as intended, as long as the subtraction doesn't underflow which would be undefined behavior.
+```cpp
+void work(ptrdiff_t start, ptrdiff_t end)
+{
+	ptrdiff_t const distance = std::abs(end - start);
+}
+```
+
+
 # Things That Often Work
 
 This chapter is a summary of implementations that often work but still have cases we must guard for.
+It contains code that we might find even in operational in-production software that seems to work fine but is susceptible to malicious inputs.
 
 ## Midpoint
 

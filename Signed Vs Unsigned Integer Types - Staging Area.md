@@ -1,35 +1,11 @@
 This note is a copy of [[Signed Vs Unsigned Integer Types - Source Notes]].
 The intention is to move piece by piece from this note to [[Signed Vs Unsigned Integer Types]] until this note is empty.
 
+
+
 (
 TODO
-Find where to put the following, demonstrating that we cannot compute distances between values like normally would when using unsigned integers.
-
-This looks like it would give us the distance between `v1` and `v2`,
-and in some sense it does,
-but it doesn't give the shortest distance and the `std::abs` will trigger a compiler error [(32)](https://stackoverflow.com/questions/47283449/should-signed-or-unsigned-integers-be-used-for-sizes).
-```cpp
-void work(std::size_t v1, std::size_t v2)
-{
-	std::size_t distance = std::abs(v1 - v2);
-}
-```
-The problem is that `v1 - v2`, with unsigned `v1` and `v2`, produces an unsigned result.
-If `v1 < v2` then we wrap around and get a very large positive value.
-The distance from `v2` to `v1` if we start walking away from `v1`, hit the upper bound, wrapped back down to zero, and finally continued on to `v1`.
-This is probably not what was intended.
-The `std::abs` doesn't save us because by the time the argument has been computed we already have a too large value, since the expression cannot ever be negative.
-Also, `std::abs` doesn't make any sense for an unsigned type since if we were to implement it it would be the identity function.
-For this reason the standard library designers opted to not provide that overload,
-giving a compiler error to inform us that we are probably not doing what we thing we are doing.
-One way to compute the distance is `std::max(v1, v2) - std::min(v1, v2)`.
-
-With signed integers the original computation works as intended.
-```cpp
-void work(std::ptrdiff_t v1, std::ptrdiff_t v2)
-{
-	std::ptrdiff_t distance = std::abs(v1 - v2);
-```
+Find where to put the following, demonstrating that 
 )
 
 
