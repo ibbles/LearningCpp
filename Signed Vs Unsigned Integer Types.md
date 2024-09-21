@@ -456,7 +456,7 @@ This chapter contains a few examples of such cases.
 ## Midpoint, i.e. "Nearly All Binary Searches Are Broken"
 
 A step in many algorithms involves finding the midpoint of an index range.
-This is used during binary search, merge sort, and many other divide-and-conqueror algorithms [(61)](https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/) [(25)](https://graphitemaster.github.io/aau/).
+This is used during binary search, merge sort, and many other divide-and-conquer algorithms [(61)](https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/) [(25)](https://graphitemaster.github.io/aau/).
 The classical, but broken, implementation is as follows.
 ```cpp
 integer_t search(Container<T>& container, T key, integer_t low, integer_t high)
@@ -467,8 +467,10 @@ integer_t search(Container<T>& container, T key, integer_t low, integer_t high)
 }
 ```
 
-If we have a large range then the `low + high` part can overflow.
+If we have a range at high indices then the `low + high` part will overflow, resulting either in undefined behavior (for signed integers) or the wrong result (for unsigned integers).
 It doesn't matter if we use signed or unsigned indices, both cases will fail.
+Though unsigned integers will be able to handle larger containers than signed integers.
+
 The proposed solution is to use `mid = low + (high - low) / 2` instead.
 This fixes the problem by computing a relative offset, which small, instead of a big sum.
 ```cpp
@@ -479,6 +481,9 @@ integer_t search(Container<T>& container, T key, integer_t low, integer_t high)
 	// Check if container[mid] is less than, equal to, or larger than key.
 }
 ```
+
+This will instead fail if the indices are allowed to be negative since subtracting a very negative value is the same as adding a very large value.
+Negative indices are more uncommon though, so this variant often works in practice.
 
 If we use signed integers then we can use the sum version if we first convert `low` and `high` to the same-size unsigned integer type, do the arithmetic, and then convert back to the signed type.
 This is not a recommendation, just an observation.
@@ -505,6 +510,16 @@ Better to fail early [(80)](https://www.martinfowler.com/ieeeSoftware/failFast.p
 The take-away from this example is to avoid adding integers that can be large.
 Try to rewrite the computation, and strive to use offsets instead of absolute values.
 
+# Things That Often Work
+
+This chapter is a summary of implementations that often work but still have cases we must guard for.
+
+## Midpoint
+
+See _Midpoint, i.e. "Nearly All Binary Searches Are Broken"_ for details.
+
+The typical way of finding the middle of an index range is `mid = low + (high - low) / 2;
+This works for all unsigned values (citation/test needed) as long as `low` is less than or equal to `high`, but signed is susceptible to overflow if `high` is large and `low` is negative.
 
 # Recommendations
 
