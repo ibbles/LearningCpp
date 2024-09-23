@@ -465,7 +465,8 @@ Another recommendation is to always use signed even in this case.
 - [_Google C++ Style Guide_ > _Integers_](https://google.github.io/styleguide/cppguide.html#Integer_Types)
 - [_Learn C++_ > _4.5 — Unsigned integers, and why to avoid them_ @ learncpp.com](https://www.learncpp.com/cpp-tutorial/unsigned-integers-and-why-to-avoid-them/)
 
-# Loop Over Container
+# Container Loops
+## Loop Over Container
 
 Looping over a container, such as an array or an `std::vector` is still a common operation.
 The classical for loop is written as follows:
@@ -493,7 +494,7 @@ Things to be aware of [(28)](https://gustedt.wordpress.com/2013/07/15/a-praise-o
 
 Since `container.size()` is often unsigned, specifically `std::size_t`, which is an indication that `integer_t` should be `std::size_t` as well.
 
-# Looping Over Two Containers
+## Looping Over Two Containers
 
 ```cpp
 void work(Container1& container1, Container2& container2)
@@ -512,7 +513,137 @@ void work(Container1& container1, Container2& container2)
 What manners of evil may that cause?
 )
 
-# Test If An Index Is Valid For A Container
+
+## Loop Over A Container Backwards
+
+When iterating backwards we need to use different loop iteration conditions depending on if the loop counter is signed or unsigned.
+
+With a signed loop counter we initialize the loop counter to the last index of the container, i.e. size - 1, and stop when the index becomes negative, because that means that we have gone past the start of the container.
+This works since signed integer types behaves normally around zero, decrementing from zero produces a values less than zero.
+
+```cpp
+void work(Container& container)
+{
+	for (ptrdiff_t index = std::ssize(container) - 1; index >= 0; --index)
+	{
+		// Workd with container[index].
+	}
+}
+```
+This works for all cases, including the empty container, as long as the container isn't larger than `std::numeric_limits<ptrdiff_t>::max()`.
+
+With an unsigned loop counter we cannot do the same since the value cannot become negative.
+It is easy to do this by accident, but luckily the error is quickly detected in testing since it produces an infinite loop and most likely a segmentation fault after the loop counter has wrapped around.
+The classical accidentally infinite loop:
+```cpp
+void work(Container& container)
+{
+	for (size_t index = container.size() - 1; index >= 0; --index)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+
+A few different variants to work around this has been invented [(75)](https://youtu.be/82jVpEmAEV4?t=2455).
+
+One way is to use a signed loop counter also when the container has an unsigned size.
+```cpp
+void work(Container& container)
+{
+	for (ptrdiff_t index = static_cast<ptrdiff_t>(container.size()) - 1;
+		index >= 0;
+		--index)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+A drawback is that there is an unsigned to signed conversion in the code.
+Not all `size_t` values can be represented in `ssize_t`.
+It will work for `std::vector`, but it may not work for all container types.
+If you have a too large size, more than 9 quintillion for 64-bit, then that would become a negative value when cast to signed and the loop would not run.
+This is a case of "It works almost all the time.", which is really bad from a safety and security perspective since it makes the problem difficult to discover in testing.
+
+A more common way for the unsigned integer case is to detect the wraparound of the loop counter and stop when the index becomes larger than the container size, because that means that the counter wrapped around at zero.
+Instead of asking "Is `index` still above zero?" we ask "Is `index` still below the size?".
+This is the same test we always do with unsigned indices, so why not use it here as well?
+```cpp
+void work(Container& container)
+{
+	for (size_t index = container.size() - 1;
+		index < container.size();
+		--index)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+A drawback of this approach is that prevents the use of `-fsanitize=unsigned-integer-overflow` since here we depend on the wrapping behavior, which is precisely what that sanitizer checks for.
+
+The signed variant checks for, to me at least, the more intuitive condition since the intention when the code was written was to loop from the size down to, and including, zero.
+The unsigned variant has a more familiar condition since it uses the same one for both forwards and backwards loops.
+To reverse the loop direction with an unsigned loop counter we simply start at the other end instead of the  beginning and step the other direction, no need to mess with the termination condition.
+To reverse the loop direction with a signed loop counter we must edit all three parts of the loop header.
+
+We cannot use the `index >= 0` condition with an unsigned counter because that expression is always true, for any value of `index`.
+We cannot use the `index < container.size()`  condition with a signed counter because it won't wrap at zero and negative indices will be passed to `container[index]`.
+So we have not yet found a formulation that works with both a singed and an unsigned counter.
+
+Another variant that works with unsigned indices is the following [(33)](https://stackoverflow.com/questions/10040884/signed-vs-unsigned-integers-for-lengths-counts).
+```cpp
+void work(Container& container)
+{
+	size_t index = container.size();
+	while (index-- > 0)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+Here we use the post-fix decrement operator within the loop condition.
+This means that index starts one-past the actual index we want to start work on, but it is decremented to a valid index in the loop header before it is first used to index into the container.
+If there is no valid index, i.e. the container is empty, then `index` starts at 0 and the condition, which sees the initial value of 0, ends the loop immediately since 0 isn't larger than 0.
+If the container is non-empty then we first get the size of the container, check it against 0 and find that we should enter the loop, the index is decrement to the last valid index, and  that index is used to access an element in the container.
+Then the once-decremented index is tested against 0 and if still larger then we do another round in the loop.
+It some point the index becomes 1, which means that we are about the enter the last loop iteration.
+The condition tests 1 > 0, index is decremented to 0 and we access `container[0]`.
+Then we do the last condition check with `index` being zero, which evaluates to false and the loop ends.
+The final decrement still happens so at the end of the loop `index` is `std::numeric_limits<std::size_t::max()`.
+So this variant also triggers wrapping even though we don't use the result, but it is still enough to trigger an error with `fsanitize=unsigned-integer-overflow`.
+
+Some write the condition `index --> 0` and calls `-->` the "down-to" operator.
+Don't do this. It hides what is actually happening.
+
+Another variant is a do-while loop.
+```cpp
+void work(Container& container)
+{
+	if (container.empty())
+		return;
+
+	size_t index = container.size();
+	do
+	{
+		index--;
+		// Work with container[index].
+	} while (index != 0);
+}
+```
+
+This works by initializing the index to the container size and immediately decrementing it to a valid index to be used.
+Then the loop condition checks if this was the last iteration and if so terminates the loop.
+This avoids the wraparound since we only decrement if it safe to do so.
+A drawback is that we must remember to check for the empty case explicitly since if we forget that we unconditionally decrement the 0 index and use an invalid index in the loop.
+Here `-fsanitize=unsigned-integer-overflow` will correctly point out the error for us, if we have a test with an empty container.
+
+
+# Test If An Index Is Valid
+## Test If An Index Is Valid For A Container
 
 It is common for index ranges to be valid from zero to some positive number, such as the size of a container.
 With a signed integer type we must check both the lower and upper end of the range.
@@ -579,7 +710,7 @@ bool isValidIndex(const Container& container, ptrdiff_t index)
 
 The above `static_assert` passes for `std::vector<char>`.
 
-# Test If An Index Is Valid For A Begin / End Pointer Pair
+## Test If An Index Is Valid For A Begin / End Pointer Pair
 
 Sometimes we have a `begin` / `end` pair holding a buffer [(76)](https://youtu.be/DRgoEKrTxXY?t=725).
 The following bounds check is incorrect since the `begin + index` computation may overflow [(77)](https://www.kb.cert.org/vuls/id/162289/).
@@ -635,6 +766,9 @@ bool work(T* begin, T* end, size_t index)
 
 I think this is correct assuming the buffer pointed to isn't larger than `std::numeric_limits<ptrdiff_t>::max`, in which case the subtraction is undefined behavior.
 For such large buffers I believe the only safe way is to use `(pointer, size)` instead of `(begin, end)`.
+
+## Test If An Index I Valid For A Pointer / Size Pair
+
 ```cpp
 template <typename T>
 bool work(T* begin, size_t size, size_t index)
@@ -645,11 +779,45 @@ bool work(T* begin, size_t size, size_t index)
 	// Work with being[index].
 }
 ```
+I believe this way is able to correctly address all of memory.
+
+The extension to signed integer is straight-forward.
+```cpp
+template <typename T>
+bool work(T* begin, ptrdiff_t size, ptrdiff_t index)
+{
+	if (index < 0 || index >= size)
+		return false;
+
+	// Work with being[index].
+}
+```
+
 
 # Compute An Index With A Non-Trivial Expression
 
 Not all functions simply loop over a container, sometimes we need to do non-trivial arithmetic to compute the next index.
 This chapter contains a few examples of such cases.
+
+In what ways can the following fail [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned)?
+```cpp
+uint64_t base = get_base_index();
+int16_t delta = get_offset(base);
+uint64_t index = base + delta;
+```
+
+- `get_base_index` might not return `uint64_t`.
+	- Signed-unsigned conversion if return value is signed.
+	- What happens if the returned value is negative?
+- `get_offset` may not take an `uint64_t` parameter.
+	- What if it is a smaller unsigned type?
+	- What happens if is is a 64-bit signed type?
+	- What happens if it is a signed type smaller than 64-bits?
+- `get_offset` might not return `int16_t`.
+	- Same questions as for `get_base_index` return value, with the additions that the returned type may be larger than 16 bits.
+- `delta` is implicitly converted to `uint64_t` for the addition. What happens if it is negative?
+- `delta` may be more negative than the value of `base`.
+- `index` may be larger than the size of the container it is used to index into.
 
 
 ## Division In Index Calculation
