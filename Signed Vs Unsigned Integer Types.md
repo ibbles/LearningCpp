@@ -667,6 +667,168 @@ What manners of evil may that cause?
 )
 
 
+## Iterating Over All But The Last Element
+
+Sometimes we need to visit all but the last element of a container [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+The straight-forward way to write this is
+```cpp
+void work(Container& container)
+{
+	for (integer_t index = 0; index < container.size() - 1; ++index)
+	{
+		// Work with container[index].
+	}
+]
+```
+
+This fails with unsigned integers for empty containers [(68)](https://github.com/ericniebler/stl2/issues/182) while with signed integers it works as intended.
+With unsigned, `container.size() - 1` becomes `0 - 1` which wraps around to a very large number which causes the loop to run too many iterations operating on invalid memory.
+We can fix the empty container case with unsigned integers by checking before starting the loop.
+Being explicit about precondition and handling special cases separately if often a good idea [(68)](https://github.com/ericniebler/stl2/issues/182).
+It forces us to write more straight-forward code with less "trickery", which means that is is easier to understand and easier to get right.
+```cpp
+bool work(Container& container)
+{
+	if (container.empty())
+		return false;
+
+	for (size_t index = 0; index < container.size() - 1; ++index)
+	{
+		// Work with container[index].
+	}
+
+	return true;
+]
+```
+Or we can move the offset to the other side of the comparison:
+```cpp
+void work(Container& container)
+{
+	for (size_t index = 0; index + 1 < container.size(); ++index)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+The guideline is to not use subtraction with unsigned integers.
+Instead use the algebraic rules to rewrite all expressions to use addition instead.
+Not sure if that is always possible.
+(
+TODO Find a counter-example.
+)
+This goes against the guideline in _Midpoint_ since in that case the problem is overflow in the addition of two large numbers, not as here where the problem is an underflow after a subtraction.
+So the actual guideline is actually to eliminate all possibilities of underflow and overflow but that is too vague of a guideline so we need to find more specific formulations.
+In each case we need to consider the range of possible values for all inputs and all intermediate results.
+This is difficult to do correctly every time, especially when editing existing code rather than writing something new.
+
+A signed `integer_t` doesn't save us here if `Container::size()` returns an unsigned integer, such is the case with `std::vector`, since the problem has already happened before the signedness of `integer_t` event comes into play, and even then the implicit conversion rules would convert our signed index to the unsigned type anyway, which is not helpful in this case.
+
+We must either explicitly check for the empty container case or make sure the end-of-range computation is done using a signed type.
+```cpp
+
+// Handle empty container separately before the loop.
+template <typename T>
+bool work(std::vector<T>& container)
+{
+	if (container.empty())
+		return false;
+
+	for (integer_t index = 0; index < container.size() - 1; ++index)
+	{
+		// Work with container[index].
+	}
+
+	return true;
+}
+
+// Use std::ssize instead of .size() to get a signed size.
+template <typename T>
+void work(std::vector<T>& container)
+{
+	for (ptrdiff_t index = 0; index < std::ssize(container) - 1; ++index)
+	{
+		// Work with container[index].
+	}
+}
+
+// Cast the size before the subtraction.
+template <typename T>
+void work(std::vector<T>& container)
+{
+	ptrdiff_t const size = static_cast<ptrdiff_t>(container.size());
+	for (ptrdiff_t index = 0; index < size - 1; ++index)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+For many types, such as `std::vector`, it is safe to cast the unsigned size to a signed integer type of equal size because `std::vector::max_size` will never exceed that, but for other types that may not be the case.
+Then you need to  use the early-out-if-empty variant.
+
+In summary, the initial loop definition works when the container uses signed integers but if it uses unsigned then we must either explicitly check for the empty case or take care to use the size as an unsigned integer instead.
+If the container type supports sizes larger than `std::numeric_limits<ptrdiff_t>::max` then we must explicitly check for the empty case.
+
+
+## Iterating Over A Sub-Range
+
+Sometimes we need to iterate through a subset of the elements of a container, skipping some number of elements at the start and some number of elements at the end [(28)](https://gustedt.wordpress.com/2013/07/15/a-praise-of-size_t-and-other-unsigned-types/).
+This could for example be to SIMD vectorize the bulk of an array computation but we need to skip a few elements at the front to get to the first vector size aligned element, and we need to skip a few at the end because the remaining elements don't evenly divide the vector size.
+The straight-forward way to do this is to initialize the loop counter to the initial skip count and subtract the end skip from the container size.
+
+```cpp
+void work(Container& container, integer_t start_skip, integer_t end_skip)
+{
+	for (integer_t index = start; index < container.size() - end_skip; ++index)
+	{
+		// Work with contianer[index].
+	}
+}
+```
+
+The above fails for unsigned indices when `end_skip > container.size()` because `container.size() - end_skip` underflows, wraps around, and produces a very large number.
+This is most common with unexpectedly small, maybe empty, containers.
+The resulting behavior is that the loop will visit not only container elements it should visit but also the elements at the end that should be skipped, and then it will overrun the buffer and start operating on invalid memory.
+With this implementation it is the responsibility of the caller to eliminate all such cases.
+We can improve the implementation by first checking that we shouldn't skip the entire loop.
+```cpp
+bool work(Container& container, size_t start_skip, size_t end_skip)
+{
+	if (end_skip > container.size())
+		return false;
+
+	for (integer_t index = start; index < container.size() - end_skip; ++index)
+	{
+		// Work with contianer[index].
+	}
+
+	return true;
+}
+```
+
+With signed indices we don't have this problem since `container.size() - end_skip` will correctly produce a negative value and `index < container.size() - end_skip` will terminate the loop immediately, assuming `start_skip` is positive.
+
+Signed indices will fail to behave correctly if `start_skip` or `end_skip` is negative since that will cause it to index out of bounds of the container.
+So we need to check for that explicitly.
+```cpp
+bool work(Container& container, ptrdiff_t start_skip, ptrdiff_t end_skip)
+{
+	if (start_skip < 0 || end_skip < 0)
+		return false;
+
+	for (ptrdiff_t index = start; index < container.size() - end_skip; ++index)
+	{
+		// Work with container[index].
+	}
+
+	return true;
+}
+```
+
+An integer type that is unsigned but produces signed results in arithmetic expressions, such as `container.size() - end_skip`, would save us as long as `container.size()` is less than the maximum of the signed integer type (I think.).
+
+
 ## Loop Over A Container Backwards
 
 When iterating backwards we need to use different loop termination conditions depending on if the loop counter is signed or unsigned.
@@ -832,7 +994,6 @@ Here `-fsanitize=unsigned-integer-overflow` will correctly point out the error f
 My conclusion after all of this is that signed indices and sizes makes reverse loops easier to write correctly than unsigned ones, but we really should move away from these types of loops and instead use some higher-level way of visiting all elements of a container, such as a ranges library or iterators.
 
 
-
 # Compute An Index With A Non-Trivial Expression
 
 Not all functions simply loop over a container, sometimes we need to do non-trivial arithmetic to compute the next index.
@@ -932,167 +1093,6 @@ Better to fail early [(80)](https://www.martinfowler.com/ieeeSoftware/failFast.p
 
 The take-away from this example is to avoid adding integers that can be large.
 Try to rewrite the computation, and strive to use offsets instead of absolute values.
-
-# Iterating Over All But The Last Element
-
-Sometimes we need to visit all but the last element of a container [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
-The straight-forward way to write this is
-```cpp
-void work(Container& container)
-{
-	for (integer_t index = 0; index < container.size() - 1; ++index)
-	{
-		// Work with container[index].
-	}
-]
-```
-
-This fails with unsigned integers for empty containers [(68)](https://github.com/ericniebler/stl2/issues/182) while with signed integers it works as intended.
-With unsigned, `container.size() - 1` becomes `0 - 1` which wraps around to a very large number which causes the loop to run too many iterations operating on invalid memory.
-We can fix the empty container case with unsigned integers by checking before starting the loop.
-Being explicit about precondition and handling special cases separately if often a good idea [(68)](https://github.com/ericniebler/stl2/issues/182).
-It forces us to write more straight-forward code with less "trickery", which means that is is easier to understand and easier to get right.
-```cpp
-bool work(Container& container)
-{
-	if (container.empty())
-		return false;
-
-	for (size_t index = 0; index < container.size() - 1; ++index)
-	{
-		// Work with container[index].
-	}
-
-	return true;
-]
-```
-Or we can move the offset to the other side of the comparison:
-```cpp
-void work(Container& container)
-{
-	for (size_t index = 0; index + 1 < container.size(); ++index)
-	{
-		// Work with container[index].
-	}
-}
-```
-
-The guideline is to not use subtraction with unsigned integers.
-Instead use the algebraic rules to rewrite all expressions to use addition instead.
-Not sure if that is always possible.
-(
-TODO Find a counter-example.
-)
-This goes against the guideline in _Midpoint_ since in that case the problem is overflow in the addition of two large numbers, not as here where the problem is an underflow after a subtraction.
-So the actual guideline is actually to eliminate all possibilities of underflow and overflow but that is too vague of a guideline so we need to find more specific formulations.
-In each case we need to consider the range of possible values for all inputs and all intermediate results.
-This is difficult to do correctly every time, especially when editing existing code rather than writing something new.
-
-A signed `integer_t` doesn't save us here if `Container::size()` returns an unsigned integer, such is the case with `std::vector`, since the problem has already happened before the signedness of `integer_t` event comes into play, and even then the implicit conversion rules would convert our signed index to the unsigned type anyway, which is not helpful in this case.
-
-We must either explicitly check for the empty container case or make sure the end-of-range computation is done using a signed type.
-```cpp
-
-// Handle empty container separately before the loop.
-template <typename T>
-bool work(std::vector<T>& container)
-{
-	if (container.empty())
-		return false;
-
-	for (integer_t index = 0; index < container.size() - 1; ++index)
-	{
-		// Work with container[index].
-	}
-
-	return true;
-}
-
-// Use std::ssize instead of .size() to get a signed size.
-template <typename T>
-void work(std::vector<T>& container)
-{
-	for (ptrdiff_t index = 0; index < std::ssize(container) - 1; ++index)
-	{
-		// Work with container[index].
-	}
-}
-
-// Cast the size before the subtraction.
-template <typename T>
-void work(std::vector<T>& container)
-{
-	ptrdiff_t const size = static_cast<ptrdiff_t>(container.size());
-	for (ptrdiff_t index = 0; index < size - 1; ++index)
-	{
-		// Work with container[index].
-	}
-}
-```
-
-For many types, such as `std::vector`, it is safe to cast the unsigned size to a signed integer type of equal size because `std::vector::max_size` will never exceed that, but for other types that may not be the case.
-Then you need to  use the early-out-if-empty variant.
-
-In summary, the initial loop definition works when the container uses signed integers but if it uses unsigned then we must either explicitly check for the empty case or take care to use the size as an unsigned integer instead.
-If the container type supports sizes larger than `std::numeric_limits<ptrdiff_t>::max` then we must explicitly check for the empty case.
-
-
-# Iterating Over A Sub-Range
-
-Sometimes we need to iterate through a subset of the elements of a container, skipping some number of elements at the start and some number of elements at the end [(28)](https://gustedt.wordpress.com/2013/07/15/a-praise-of-size_t-and-other-unsigned-types/).
-This could for example be to SIMD vectorize the bulk of an array computation but we need to skip a few elements at the front to get to the first vector size aligned element, and we need to skip a few at the end because the remaining elements don't evenly divide the vector size.
-The straight-forward way to do this is to initialize the loop counter to the initial skip count and subtract the end skip from the container size.
-
-```cpp
-void work(Container& container, integer_t start_skip, integer_t end_skip)
-{
-	for (integer_t index = start; index < container.size() - end_skip; ++index)
-	{
-		// Work with contianer[index].
-	} 
-}
-```
-
-The above fails for unsigned indices when `end_skip > container.size()` because `container.size() - end_skip` underflows, wraps around, and produces a very large number.
-This is most common with unexpectedly small, maybe empty, containers.
-The resulting behavior is that the loop will visit not only container elements it should visit but also the elements at the end that should be skipped, and then it will overrun the buffer and start operating on invalid memory.
-With this implementation it is the responsibility of the caller to eliminate all such cases.
-We can improve the implementation by first checking that we shouldn't skip the entire loop.
-```cpp
-bool work(Container& container, size_t start_skip, size_t end_skip)
-{
-	if (end_skip > container.size())
-		return false;
-
-	for (integer_t index = start; index < container.size() - end_skip; ++index)
-	{
-		// Work with contianer[index].
-	}
-
-	return true;
-}
-```
-
-With signed indices we don't have this problem since `container.size() - end_skip` will correctly produce a negative value and `index < container.size() - end_skip` will terminate the loop immediately, assuming `start_skip` is positive.
-
-Signed indices will fail to behave correctly if `start_skip` or `end_skip` is negative since that will cause it to index out of bounds of the container.
-So we need to check for that explicitly.
-```cpp
-bool work(Container& container, ptrdiff_t start_skip, ptrdiff_t end_skip)
-{
-	if (start_skip < 0 || end_skip < 0)
-		return false;
-
-	for (ptrdiff_t index = start; index < container.size() - end_skip; ++index)
-	{
-		// Work with container[index].
-	}
-
-	return true;
-}
-```
-
-An integer type that is unsigned but produces signed results in arithmetic expressions, such as `container.size() - end_skip`, would save us as long as `container.size()` is less than the maximum of the signed integer type (I think.).
 
 
 # Computing Distance Between Indices
