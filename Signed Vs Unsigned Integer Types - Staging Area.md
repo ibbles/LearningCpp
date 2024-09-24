@@ -27,53 +27,6 @@ The intention is to move piece by piece from this note to [[Signed Vs Unsigned I
 
 
 
-### Loop Limited By Lower Bound
-
-
-Can we save it by making the loop counter signed?
-
-```cpp
-for (ssize_t i = (ssize_t)size - 1; i >= 0; --i)
-```
-
-This will make the loop terminate.
-An effect of the fact that signed integers have normal behavior around zero.
-Decrementing a signed value from 0 produces a value less than zero, as opposed to what happens with unsigned values since at that point it would wrap around back up to a very large number.
-
-A drawback is that there is an unsigned to signed conversion in the code.
-Not all `size_t` values can be represented in `ssize_t`.
-(
-Though all values that `std::vector::size` can return can be represented by `std::ptrdiff_t`.
-A `char[]` can be that large though.
-)
-If you have a too large size, more than 9 quintillion for 64-bit, then that would become a negative value when cast to signed and the loop would not run.
-This is a case of "It works almost all the time.", which is really bad from a safety and security perspective since it makes the problem difficult to discover in testing.
-
-An alternative formulation of the loop is to detect the wraparound, i.e. to stop when `i` becomes larger than `size`.
-```cpp
-for (size_t i = size - 1; i < size; i--)
-```
-
-Instead of asking "Is `i` still above zero?" we ask "Is `i` still below the size?".
-This is the same test we always do for index parameters, so why not use it in the loop test as well?
-A drawback is that `-fsanitize=unsigned-integer-overflow` will trigger on this.
-Which it should, though it is a false positive.
-You should turn on sanitizers in your test builds.
-In most cases we want to detect cases where wraparound can occur and protect against it.
-Only in special cases is wraparound part of the algorithm.
-
-Another option is to do a do-while loop.
-```cpp
-size_t i = size;
-do
-{
-	i--;
-	// Use i.
-} while (i != 0);
-```
-Always terminates, does not wraparound.
-Unless `size` is zero which will cause the first `i--` to set `i` to `MAX_SIZE` and we get a really long loop.
-
 
 
 # Detecting Error States

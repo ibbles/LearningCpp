@@ -516,11 +516,10 @@ What manners of evil may that cause?
 
 ## Loop Over A Container Backwards
 
-When iterating backwards we need to use different loop iteration conditions depending on if the loop counter is signed or unsigned.
+When iterating backwards we need to use different loop termination conditions depending on if the loop counter is signed or unsigned.
 
-With a signed loop counter we initialize the loop counter to the last index of the container, i.e. size - 1, and stop when the index becomes negative, because that means that we have gone past the start of the container.
-This works since signed integer types behaves normally around zero, decrementing from zero produces a values less than zero.
-
+With a signed loop counter we can initialize the loop counter to the last index of the container, i.e. size - 1, and stop when the index becomes negative because that means that we have gone past the start of the container.
+This works since signed integer types behaves normally around zero, decrementing from zero produces a values less than zero [(75)](https://youtu.be/82jVpEmAEV4?t=2455).
 ```cpp
 void work(Container& container)
 {
@@ -530,10 +529,12 @@ void work(Container& container)
 	}
 }
 ```
-This works for all cases, including the empty container, as long as the container isn't larger than `std::numeric_limits<ptrdiff_t>::max()`.
+This works for all cases, including with an empty container, as long as the container isn't larger than `std::numeric_limits<ptrdiff_t>::max()`.
 
 With an unsigned loop counter we cannot do the same since the value cannot become negative.
-It is easy to do this by accident, but luckily the error is quickly detected in testing since it produces an infinite loop and most likely a segmentation fault after the loop counter has wrapped around.
+Decrementing from zero produces a larger value, not a smaller.
+The `index >= 0` condition is always true.
+It is a mistake that is easy to do by accident, but luckily the error is quickly detected in testing since it produces an infinite loop and most likely a segmentation fault after the loop counter has wrapped around.
 The classical accidentally infinite loop:
 ```cpp
 void work(Container& container)
@@ -546,9 +547,7 @@ void work(Container& container)
 ```
 
 
-A few different variants to work around this has been invented [(75)](https://youtu.be/82jVpEmAEV4?t=2455).
-
-One way is to use a signed loop counter also when the container has an unsigned size.
+Can we save it by making the loop counter signed [(75)](https://youtu.be/82jVpEmAEV4?t=2455) and cast the unsigned container size?
 ```cpp
 void work(Container& container)
 {
@@ -560,16 +559,18 @@ void work(Container& container)
 	}
 }
 ```
+This is equivalent to the `std::ssize` variant above but for the following discussion we allow for very large containers, larger than `std::numeric_limits<ptrdiff_t>::max()`.
 
 A drawback is that there is an unsigned to signed conversion in the code.
-Not all `size_t` values can be represented in `ssize_t`.
-It will work for `std::vector`, but it may not work for all container types.
+Not all `size_t` values can be represented in `ptrdiff_t`.
+It will work for `std::vector`, but it may not work for any particular container type you may have.
 If you have a too large size, more than 9 quintillion for 64-bit, then that would become a negative value when cast to signed and the loop would not run.
 This is a case of "It works almost all the time.", which is really bad from a safety and security perspective since it makes the problem difficult to discover in testing.
+The fact that the loop doesn't run at all instead of for the first 9 quintillion elements may be an advantage since that will hopefully make it easier to detect.
 
 A more common way for the unsigned integer case is to detect the wraparound of the loop counter and stop when the index becomes larger than the container size, because that means that the counter wrapped around at zero.
-Instead of asking "Is `index` still above zero?" we ask "Is `index` still below the size?".
-This is the same test we always do with unsigned indices, so why not use it here as well?
+Instead of asking "Is the index still above zero?" we ask "Is the index still smaller than the size?".
+This is the same test we usually do with unsigned indices, with regular forward loops and index parameters, so why not use it here as well?
 ```cpp
 void work(Container& container)
 {
@@ -583,17 +584,46 @@ void work(Container& container)
 ```
 
 A drawback of this approach is that prevents the use of `-fsanitize=unsigned-integer-overflow` since here we depend on the wrapping behavior, which is precisely what that sanitizer checks for.
+We want to be able to use the sanitizers so I don't like this approach for that reason.
+(
+Is there an annotation, perhaps a comment, we can add to tell the sanitizer that wrapping is expected here?
+)
 
 The signed variant checks for, to me at least, the more intuitive condition since the intention when the code was written was to loop from the size down to, and including, zero.
 The unsigned variant has a more familiar condition since it uses the same one for both forwards and backwards loops.
-To reverse the loop direction with an unsigned loop counter we simply start at the other end instead of the  beginning and step the other direction, no need to mess with the termination condition.
+To reverse the loop direction with an unsigned loop counter we simply start at the end instead of the  beginning and step the other direction, no need to mess with the termination condition.
 To reverse the loop direction with a signed loop counter we must edit all three parts of the loop header.
 
+Note that there is no way to write a reverse for loop like this when the signed-ness of the loop counter is unknown.
 We cannot use the `index >= 0` condition with an unsigned counter because that expression is always true, for any value of `index`.
 We cannot use the `index < container.size()`  condition with a signed counter because it won't wrap at zero and negative indices will be passed to `container[index]`.
-So we have not yet found a formulation that works with both a singed and an unsigned counter.
+Two options we have are to either check both conditions and suffer the "expression is always true" warning when the container uses an unsigned type, or to delegate the loop termination condition to an overloaded helper function.
+```cpp
+template <typename Container>
+bool continueReverseLoop(size_t index, Container const& container)
+{
+	return index < container.size();
+}
 
-Another variant that works with unsigned indices is the following [(33)](https://stackoverflow.com/questions/10040884/signed-vs-unsigned-integers-for-lengths-counts).
+template <typename Container>
+bool continueReverseLoop(ptrdiff_t index, Container const& container)
+{
+	return index > 0;
+}
+
+template <typename Container>
+void work(Container& container)
+{
+	for (Container::size_type index = container.size() - 1;
+		continueReverseLoop(index, container);
+		--index)
+	{
+		// Work with container[index].
+	}
+}
+```
+
+Another option when using unsigned indices is to take a completely different approach,  one based on a while loop instead of the conventional for loop [(33)](https://stackoverflow.com/questions/10040884/signed-vs-unsigned-integers-for-lengths-counts).
 ```cpp
 void work(Container& container)
 {
@@ -606,20 +636,25 @@ void work(Container& container)
 ```
 
 Here we use the post-fix decrement operator within the loop condition.
-This means that index starts one-past the actual index we want to start work on, but it is decremented to a valid index in the loop header before it is first used to index into the container.
+This means that index starts one-past the actual index we want to start work on, but it is decremented to a valid index in the loop header before it is first used to index into the container within the loop body.
 If there is no valid index, i.e. the container is empty, then `index` starts at 0 and the condition, which sees the initial value of 0, ends the loop immediately since 0 isn't larger than 0.
-If the container is non-empty then we first get the size of the container, check it against 0 and find that we should enter the loop, the index is decrement to the last valid index, and  that index is used to access an element in the container.
+If the container is non-empty then we first get the size of the container, check it against 0 and find that we should enter the loop, the index is decrement to the last valid index, and  that index is used to access an element of the container in the loop body.
 Then the once-decremented index is tested against 0 and if still larger then we do another round in the loop.
 It some point the index becomes 1, which means that we are about the enter the last loop iteration.
-The condition tests 1 > 0, index is decremented to 0 and we access `container[0]`.
-Then we do the last condition check with `index` being zero, which evaluates to false and the loop ends.
-The final decrement still happens so at the end of the loop `index` is `std::numeric_limits<std::size_t::max()`.
+The condition tests 1 > 0, the index is decremented to 0 and we access `container[0]`.
+Then we do the last condition check with the index being zero, which evaluates to false and the loop ends.
+The final decrement still happens so at the end of the loop the index is `std::numeric_limits<size_t>::max()`.
 So this variant also triggers wrapping even though we don't use the result, but it is still enough to trigger an error with `fsanitize=unsigned-integer-overflow`.
+(
+I assume, I haven't tested yet.
+I assume the compiler is allowed to notice that the final value is never read and therefore structure the machine code in a way such that the final decrement never happens.
+Not sure if a transformation like that is still possible to do with `-fsanitize=unsigned-integer-overflow` enabled, or if the add added instrumentation prevents that.
+)
 
-Some write the condition `index --> 0` and calls `-->` the "down-to" operator.
+Some write the condition as `index --> 0`, instead of `index-- > 0`, and calls `-->` the "down-to" operator.
 Don't do this. It hides what is actually happening.
 
-Another variant is a do-while loop.
+Another variant is a do-while loop [(75)](https://youtu.be/82jVpEmAEV4?t=2455).
 ```cpp
 void work(Container& container)
 {
@@ -635,11 +670,13 @@ void work(Container& container)
 }
 ```
 
-This works by initializing the index to the container size and immediately decrementing it to a valid index to be used.
+This works by initializing the index to the container size and immediately decrementing it to a valid index to be used in the loop body.
 Then the loop condition checks if this was the last iteration and if so terminates the loop.
 This avoids the wraparound since we only decrement if it safe to do so.
-A drawback is that we must remember to check for the empty case explicitly since if we forget that we unconditionally decrement the 0 index and use an invalid index in the loop.
+A drawback is that we must remember to check for the empty container case explicitly since if we forget that we unconditionally decrement the 0 index and use an invalid index in the loop.
 Here `-fsanitize=unsigned-integer-overflow` will correctly point out the error for us, if we have a test with an empty container.
+
+My conclusion after all of this is that signed indices and sizes makes reverse loops easier to write correctly than unsigned ones, but we really should move away from these types of loops and instead use some higher-level way of visiting all elements of a container, such as a ranges library or iterators.
 
 
 # Test If An Index Is Valid
