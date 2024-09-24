@@ -465,8 +465,161 @@ Another recommendation is to always use signed even in this case.
 - [_Google C++ Style Guide_ > _Integers_](https://google.github.io/styleguide/cppguide.html#Integer_Types)
 - [_Learn C++_ > _4.5 — Unsigned integers, and why to avoid them_ @ learncpp.com](https://www.learncpp.com/cpp-tutorial/unsigned-integers-and-why-to-avoid-them/)
 
+# Test If An Index Is Valid
+## Test If An Index Is Valid For A Container
+
+It is common for index ranges to be valid from zero to some positive number, such as the size of a container.
+With a signed integer type we must check both the lower and upper end of the range.
+With an unsigned integer we only need to check the upper range since the lower bound is built into the type [(28)](https://gustedt.wordpress.com/2013/07/15/a-praise-of-size_t-and-other-unsigned-types/).
+
+Unsigned integer for both the size and the index:
+```cpp
+template <typename Container>
+bool isValidIndex(Container& const container, size_t index)
+{
+	return index < container.size();
+}
+```
+
+Signed index for both the size and the index:
+```cpp
+template <typename Container>
+bool isValidIndex(Container& const container, ptrdiff_t index)
+{
+	return index >= 0 && index < container.size();
+}
+```
+
+Unsigned size, signed index.
+In this case we need to handle the non-overlapping part of the two integer types' range, i.e. the size values larger than the largest possible signed integer.
+```cpp
+template <typename Container>
+bool isValidIndex(const Container& container, ptrdiff_t index)
+{
+	// Negative indices are never valid.
+	if (index < 0)
+		return false;
+
+	// Sanity check of the container size. If this check fails then
+	// you don't have a choice but to use size_t instead of ptrdiff_t
+	// for indexing.
+	constexpr size_t const max_allowed_index =
+		static_cast<size_t>(std::numeric_limits<ptrdiff_t>::max());
+	if (container.size() > max_allowed_index)
+	{
+		report_error("Container too large for signed indexing");
+	}
+
+	return index < std::ssize(container);
+}
+```
+
+If the the container has implementation size limitations smaller than the full range of `size_t` then we can turn the runtime check of the upper bound to a compile-time check instead.
+```cpp
+template <typename Container>
+bool isValidIndex(const Container& container, ptrdiff_t index)
+{
+	// Sanity check of the possible container sizes. If this check fails
+	// then you don't have a choice but to use size_t instead of ptrdiff_t
+	// for indexing if you want to guarantee that all possible container
+	// sizes will work.
+	size_t constexpr max_allowed_size =
+		static_cast<size_t>(std::numeric_limits<ptrdiff_t>::max());
+	static_assert(std::vector<T>().max_size() <= max_allowed_size);
+
+	return index >= 0 && index < std::ssize(container);
+}
+```
+
+The above `static_assert` passes for `std::vector<char>`.
+
+## Test If An Index Is Valid For A Begin / End Pointer Pair
+
+Sometimes we have a `begin` / `end` pair holding a buffer [(76)](https://youtu.be/DRgoEKrTxXY?t=725).
+The following bounds check is incorrect since the `begin + index` computation may overflow [(77)](https://www.kb.cert.org/vuls/id/162289/).
+This is undefined behavior even though `index` is unsigned because `begin` is a pointer.
+(
+TODO Find ref. to the relevant section in eel.is/c++draft.
+)
+```cpp
+template <typename T>
+bool work(T* begin, T* end, size_t index)
+{
+	// Possible undefined behavior.
+	if (begin + index >= end) ??
+		return false;
+
+	// Work with begin[index].
+}
+```
+
+An attempt to fix it is to check for wrap-around.
+Does not work since the overflow is undefined behavior, not wrapping.
+```cpp
+template <typename T>
+bool work(T* begin, T* end, size_t index)
+{
+	if (begin + index < begin) // The compiler may
+		return false;          // remove this code.
+
+	if (begin + index >= end)
+		return;
+
+	// Work with begin[index].
+```
+Unfortunately, since overflow on the `begin + index` computation is undefined behavior the compiler is allowed to optimize based on the assumption that this never happens.
+If the overflow cannot happen then `begin + index`, with `index` being an unsigned type, can never be less than `begin` since `index` cannot be negative.
+Therefore the check may be removed by the compiler.
+There is a warning for this, `-Wstrict-overflow=3`, but it doesn't work since GCC 8 (Find where I read this and add a link).
+
+Another source of undefined behavior is that `begin + index` is undefined behavior even without the overflow.
+Simply producing a pointer beyond the end of the underlying memory object, be it an array of a heap allocated buffer, is undefined behavior.
+
+Another way to do the check is
+```cpp
+template <typename T>
+bool work(T* begin, T* end, size_t index)
+{
+	if (index >= (end - begin))
+		return false;
+
+	// Work with being[index].
+}
+```
+
+I think this is correct assuming the buffer pointed to isn't larger than `std::numeric_limits<ptrdiff_t>::max`, in which case the subtraction is undefined behavior.
+For such large buffers I believe the only safe way is to use `(pointer, size)` instead of `(begin, end)`.
+
+## Test If An Index I Valid For A Pointer / Size Pair
+
+```cpp
+template <typename T>
+bool work(T* begin, size_t size, size_t index)
+{
+	if (index >= size)
+		return false;
+
+	// Work with being[index].
+}
+```
+I believe this way is able to correctly address all of memory.
+
+The extension to signed integer is straight-forward.
+```cpp
+template <typename T>
+bool work(T* begin, ptrdiff_t size, ptrdiff_t index)
+{
+	if (index < 0 || index >= size)
+		return false;
+
+	// Work with being[index].
+}
+```
+
+
+
 # Container Loops
-## Loop Over Container
+## Loop Over A Container
 
 Looping over a container, such as an array or an `std::vector` is still a common operation.
 The classical for loop is written as follows:
@@ -678,157 +831,6 @@ Here `-fsanitize=unsigned-integer-overflow` will correctly point out the error f
 
 My conclusion after all of this is that signed indices and sizes makes reverse loops easier to write correctly than unsigned ones, but we really should move away from these types of loops and instead use some higher-level way of visiting all elements of a container, such as a ranges library or iterators.
 
-
-# Test If An Index Is Valid
-## Test If An Index Is Valid For A Container
-
-It is common for index ranges to be valid from zero to some positive number, such as the size of a container.
-With a signed integer type we must check both the lower and upper end of the range.
-With an unsigned integer we only need to check the upper range since the lower bound is built into the type [(28)](https://gustedt.wordpress.com/2013/07/15/a-praise-of-size_t-and-other-unsigned-types/).
-
-Unsigned integer for both the size and the index:
-```cpp
-template <typename Container>
-bool isValidIndex(Container& const container, size_t index)
-{
-	return index < container.size();
-}
-```
-
-Signed index for both the size and the index:
-```cpp
-template <typename Container>
-bool isValidIndex(Container& const container, ptrdiff_t index)
-{
-	return index >= 0 && index < container.size();
-}
-```
-
-Unsigned size, signed index.
-In this case we need to handle the non-overlapping part of the two integer types' range, i.e. the size values larger than the largest possible signed integer.
-```cpp
-template <typename Container>
-bool isValidIndex(const Container& container, ptrdiff_t index)
-{
-	// Negative indices are never valid.
-	if (index < 0)
-		return false;
-
-	// Sanity check of the container size. If this check fails then
-	// you don't have a choice but to use size_t instead of ptrdiff_t
-	// for indexing.
-	constexpr size_t const max_allowed_index =
-		static_cast<size_t>(std::numeric_limits<ptrdiff_t>::max());
-	if (container.size() > max_allowed_index)
-	{
-		report_error("Container too large for signed indexing");
-	}
-
-	return index < std::ssize(container);
-}
-```
-
-If the the container has implementation size limitations smaller than the full range of `size_t` then we can turn the runtime check of the upper bound to a compile-time check instead.
-```cpp
-template <typename Container>
-bool isValidIndex(const Container& container, ptrdiff_t index)
-{
-	// Sanity check of the possible container sizes. If this check fails
-	// then you don't have a choice but to use size_t instead of ptrdiff_t
-	// for indexing if you want to guarantee that all possible container
-	// sizes will work.
-	size_t constexpr max_allowed_size =
-		static_cast<size_t>(std::numeric_limits<ptrdiff_t>::max());
-	static_assert(std::vector<T>().max_size() <= max_allowed_size);
-
-	return index >= 0 && index < std::ssize(container);
-}
-```
-
-The above `static_assert` passes for `std::vector<char>`.
-
-## Test If An Index Is Valid For A Begin / End Pointer Pair
-
-Sometimes we have a `begin` / `end` pair holding a buffer [(76)](https://youtu.be/DRgoEKrTxXY?t=725).
-The following bounds check is incorrect since the `begin + index` computation may overflow [(77)](https://www.kb.cert.org/vuls/id/162289/).
-This is undefined behavior even though `index` is unsigned because `begin` is a pointer.
-(
-TODO Find ref. to the relevant section in eel.is/c++draft.
-)
-```cpp
-template <typename T>
-bool work(T* begin, T* end, size_t index)
-{
-	// Possible undefined behavior.
-	if (begin + index >= end) ??
-		return false;
-
-	// Work with begin[index].
-}
-```
-
-An attempt to fix it is to check for wrap-around.
-Does not work since the overflow is undefined behavior, not wrapping.
-```cpp
-template <typename T>
-bool work(T* begin, T* end, size_t index)
-{
-	if (begin + index < begin) // The compiler may
-		return false;          // remove this code.
-
-	if (begin + index >= end)
-		return;
-
-	// Work with begin[index].
-```
-Unfortunately, since overflow on the `begin + index` computation is undefined behavior the compiler is allowed to optimize based on the assumption that this never happens.
-If the overflow cannot happen then `begin + index`, with `index` being an unsigned type, can never be less than `begin` since `index` cannot be negative.
-Therefore the check may be removed by the compiler.
-There is a warning for this, `-Wstrict-overflow=3`, but it doesn't work since GCC 8 (Find where I read this and add a link).
-
-Another source of undefined behavior is that `begin + index` is undefined behavior even without the overflow.
-Simply producing a pointer beyond the end of the underlying memory object, be it an array of a heap allocated buffer, is undefined behavior.
-
-Another way to do the check is
-```cpp
-template <typename T>
-bool work(T* begin, T* end, size_t index)
-{
-	if (index >= (end - begin))
-		return false;
-
-	// Work with being[index].
-}
-```
-
-I think this is correct assuming the buffer pointed to isn't larger than `std::numeric_limits<ptrdiff_t>::max`, in which case the subtraction is undefined behavior.
-For such large buffers I believe the only safe way is to use `(pointer, size)` instead of `(begin, end)`.
-
-## Test If An Index I Valid For A Pointer / Size Pair
-
-```cpp
-template <typename T>
-bool work(T* begin, size_t size, size_t index)
-{
-	if (index >= size)
-		return false;
-
-	// Work with being[index].
-}
-```
-I believe this way is able to correctly address all of memory.
-
-The extension to signed integer is straight-forward.
-```cpp
-template <typename T>
-bool work(T* begin, ptrdiff_t size, ptrdiff_t index)
-{
-	if (index < 0 || index >= size)
-		return false;
-
-	// Work with being[index].
-}
-```
 
 
 # Compute An Index With A Non-Trivial Expression
