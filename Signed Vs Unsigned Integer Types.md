@@ -259,11 +259,13 @@ uint8_t a = 1; // 0000'0001.
 
 (
 I think I mean to write something about truncation here.
+Or widening `int32_t` → `uint32_t` → `uint64_t`.
 )
 
 ## Mixing Signed And Unsigned Integer Types
 
 C++ has counter intuitive and mathematically incorrect implicit conversion rules [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch).
+The compiler will implicitly convert signed values to unsigned when a signed and an unsigned operand of the same size are passed to an operator without checking that the signed value is even representable in the unsigned type [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
 Called the usual arithmetic conversions [(48)](https://en.cppreference.com/w/cpp/language/usual_arithmetic_conversions),  [(49)](https://eel.is/c++draft/expr.arith.conv).
 This is unfortunate, a compiler error would be better [(68)](https://github.com/ericniebler/stl2/issues/182).
 
@@ -321,8 +323,61 @@ The problem is that `(a, b)` and `c` has different sizes.
 Since `a - b` is an unsigned type no sign bit extension will be performed.
 Had all values been the same size the `c` would have the value -1, as we wanted.
 
+Consider the following code that guards against invalid indices.
+```cpp
+void work(Container& container, integer_t index)
+{
+	if (index >= container.size())
+	{
+		report_error("Index passed to work is out of range for the container.");
+		return;
+	}
 
-## Integer Wrapping And Over- / Underflow
+	// Work on container[index].
+}
+```
+
+When `integer_t` is a signed type the `>=` operator is given the signed `index` parameter and the unsigned return value or `data.size()`.
+Assuming the two types are the same size, the signed `index` is converted to the unsigned type of `data.size()`.
+If `index` has a negative value then the result of the conversion is a large positive value which often will be larger than the size of the container and we enter the error reporting code block.
+However, if `index` is very negative and the container is very large then we might wrap back into the range of valid indices and perform work on a container element we shouldn't.
+
+[Some say](https://www.reddit.com/r/cpp_questions/comments/1ehc50j/comment/lfymu23/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button) , including the C++ Core Guidelines [(3)](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es102-use-signed-types-for-arithmetic), that this is not a problem, that we should pass `-Wno-sign-conversion` to the compiler, ignore the problem, and hope that it never happens.
+This is OK if we take care to eliminate all cases where a negative value can be converted to an unsigned integer type.
+I don't know how to ensure that.
+I would prefer to keep the sign-conversion warning enabled, but I'm not sure that is realistic with an signed `integer_t` type when using container types with unsigned sizes and indices such as the standard library.
+
+A problem with implicit conversion warnings is that it is not unusual that programmers try to fix them without understand the details of the code and the implication of a change [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch).
+Difficult to give an example because the issues tend to only happen in larger non-trivial codes since the mistake is obvious in isolation.
+A real world case was pieces of code from `unrar` being incorporated into Windows Defender, but with signed integers changed to unsigned which caused a security vulnerability [(72)](https://www.theregister.com/2018/04/04/microsoft_windows_defender_rar_bug/).
+A guideline is to never add a cast just because the compiler says so.
+If you do add a cast from signed to unsigned then also add a check for non-negativity and decide what to do in the case where the value is negative.
+
+Let's consider what happens with the above code if `integer_t` is unsigned instead, but we call it with a negative value, i.e the call size looks like this:
+```cpp
+void work_on_element(Container& data)
+{
+	const integer_t index {-1};
+
+	// This will log the error message even though index is not larger
+	// than data.size().
+	work(data, index);
+}
+```
+When `integer_t` is a unsigned type the conversion from a negative value to a positive value happens in the initialization of `index` in `work_on_element` instead of when evaluating `>=` in `work`, but the effect is the same.
+The difference is the lie in the signature of `work` in the signed `integer_t` case.
+The function claims to handle negative values when in reality it does not.
+
+If we want to use a signed type then we can use `std::ssize(container)` instead of `container.size()` to get the size, which will give us the size as a signed type.
+In that case there will be no sign conversion and the comparison will work as expected, i.e. `-1 >= std::ssize(data)` will always evaluate to false.
+
+When using singed `integer_t` the range check in `work` should check both sides:
+```cpp
+if (index < 0 || index >= data.size())
+```
+
+
+## Integer Over- / Underflow And Wrapping
 
 Wrapping is the act of truncating away the bits beyond those supported by the type we are using.
 If you add 1 to the largest value an unsigned integer type can hold then the value doesn't become one larger, it wraps around back to zero.
@@ -349,7 +404,7 @@ And the rest of the computation is just garbage.
 It doesn't help that `b` represents a value that "can never be negative", it still causes problems.
 
 This types of weirdness can limit the optimizer [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
-If we put the above code into a function, making some of the values parameters and other compile time constants, we get the following:
+If we put the above code into a function and make some of the values parameters and other compile time constants we get the following:
 ```cpp
 int32_t work(uint32_t b)
 {
@@ -367,21 +422,10 @@ It would be good for performance if the compiler had been able to rewrite the ex
 
 Fewer operations and the division, which is fairly expensive, has been replaced with a right-shift.
 Alas, this transformation is not legal when `b` is unsigned due to the possibility of wrapping.
-(
-The above analysis may be incorrect.
-Given
+
 ```cpp
 __attribute((noinline))
 int32_t wrap_optimization_test(uint32_t b)
-{
-    int32_t a = -2;
-	int32_t c = 2;
-	int32_t d = (a - b) / c + 10;
-    return d;
-}
-
-__attribute((noinline))
-int32_t wrap_optimization_test(int32_t b)
 {
     int32_t a = -2;
 	int32_t c = 2;
@@ -392,25 +436,16 @@ int32_t wrap_optimization_test(int32_t b)
 this is the assembly code produced by Clang 18.1 [(52)](https://godbolt.org/z/41MazoGW7):
 ```S
 wrap_optimization_test(unsigned int):
-        movl    $-2, %eax
-        subl    %edi, %eax
-        shrl    %eax
-        addl    $10, %eax
-        retq
-
-wrap_optimization_test(int):
-        movl    $-2, %ecx
-        subl    %edi, %ecx
-        movl    %ecx, %eax
-        shrl    $31, %eax
-        addl    %ecx, %eax
-        sarl    %eax
-        addl    $10, %eax
-        retq
+# Instructions that evaluate the C++ expression pretty much as written,
+# using a right-shift for the division by 2.
+movl    $-2, %eax   # eax = -2.   eax = a.
+subl    %edi, %eax  # eax -= edi. eax = a - b.
+shrl    %eax        # eax >>= 1.  eax = (a - b) / 2.
+addl    $10, %eax   # eax += 10.  eax = ((a - b) / 2) + 10.
+retq
 ```
 No DIV instruction, only shifts, and the unsigned version has fewer instructions.
 It does both the subtraction from -2 and the add of 10 so it was prevented from that part of the algebraic transformation.
-)
 
 If you do the same, i.e. add beyond the largest value or subtract beyond the smallest value, on a signed integer type you get under- or overflow instead, which is undefined behavior [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
 This means that the compiler is allowed to optimize based on the assumption that it never happens.
@@ -420,6 +455,30 @@ A value cannot suddenly teleport from one place on the number line to another.
 `(a - b) / c` is always equal to `(a / c) - (b / c)`.
 "Always" meaning "for all applications that follow the rules".
 Make sure you follow the rules.
+```cpp
+__attribute((noinline))
+int32_t wrap_optimization_test(int32_t b)
+{
+    int32_t a = -2;
+	int32_t c = 2;
+	int32_t d = (a - b) / c + 10;
+    return d;
+}
+```
+```S
+wrap_optimization_test(int):
+# Instructions that evaluate the C++ expression pretty much as written,
+# using a right-shift and some sign bit trickery for the division by 2.
+movl    $-2, %ecx   # ecx = -2.   ecx = a.
+subl    %edi, %ecx  # ecx -= edi. ecx = a - b.
+movl    %ecx, %eax  # eax = ecx.  eax = a - b.
+shrl    $31, %eax   # eax >>= 31. eax = sign(a - b)
+addl    %ecx, %eax  # eax += ecx. eax = (a - b) + sign(a - b).
+sarl    %eax        # eax >>= 1.  eax = ((a - b) + sign(a - b)) / 2.
+addl    $10, %eax   # eax += 10.  eax = (((a - b) + sign(a - b)) / 2) + 10.
+retq
+```
+The compiler can't do much even when all values are signed because division by a power-of-two isn't just a shift in this case, depending on whether the dividend is positive or negative we may need to adjust the result of the shift in order to get correct rounding towards zero instead of rounding towards negative infinity, which is what a simple shift would result in [(86)](https://stackoverflow.com/questions/39691817/divide-a-signed-integer-by-a-power-of-2).
 
 Based on the above, the guideline for deciding if a variable should be signed on unsigned is 
 
@@ -431,6 +490,12 @@ See _Disadvantages Of Unsigned_ > _Impossible To Reliable Detect Underflow_.
 With a signed integer type we can use tools such as sanitizers [(55)](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html) to detect and signal signed integer over- and underflow in our testing pipeline.
 This won't detect cases in production though, which is a cause for concern, since we usually don't ship binaries built with sanitizers enabled [53](https://lemire.me/blog/2019/05/16/building-better-software-with-better-tools-sanitizers-versus-valgrind/).
 We can also compile with the `-ftrapv` flag to catch signed under- and overflow [(54)](https://gcc.gnu.org/onlinedocs/gcc/Code-Gen-Options.html).
+
+## Changing The Type Of A Variable Or Return Value
+
+Without warnings is can be difficult to find all the places where changing the type of a variable or function's return type changes the behavior of the code that uses it.
+IDE's and other tools can help within the same project but projects that use our code is more difficult.
+The developers on that project may not even be aware that the type changed.
 
 # Operations
 
@@ -645,7 +710,41 @@ Things to be aware of [(28)](https://gustedt.wordpress.com/2013/07/15/a-praise-o
 	- May trigger implicit conversion of `index`.
 - More?
 
-Since `container.size()` is often unsigned, specifically `std::size_t`, which is an indication that `integer_t` should be `std::size_t` as well.
+`container.size()` is often unsigned, specifically `size_t`, which is an indication that `integer_t` should be `size_t` as well.
+
+It is not uncommon to see code that uses `int` for the loop counter [(13)](https://www.sandordargo.com/blog/2023/10/18/signed-unsigned-comparison-the-most-usual-violations).
+Remember that for this note we assume that `int` is 32-bit and `size_t` is 64-bit.
+```cpp
+void work(Container& container)
+{
+	for (int index = 0; index < container.size(); ++index)
+	{
+		// Work with container[index].
+	}
+}
+```
+This isn't terribly bad as long as the container isn't very large.
+The counter will only ever be positive and a positive `int` can always be implicitly converted to `std::size_t` without loss.
+This will work as expected until the container holds more elements than the largest possible `int`.
+At that point an undefined behavior sanitizer will report the overflow,
+but it is unlikely that data sets of that size are included in unit tests run with sanitizers.
+
+A similar variant is to use `unsigned int` instead, since the index will never be negative.
+```cpp
+void work(Container& container)
+{
+	for (unsigned int index = 0; index < container.size(); ++index)
+	{
+		// Work with container[index].
+	}
+}
+```
+This will loop forever if the container size is larger than the largest `unsigned int`, visiting each element again and again until we kill the process.
+The reason is that once `index` reaches `std::numeric_limits<unsigned int>::max()` and we increment one more time we wrap back to zero and we start all over again.
+A sanitizer typically don't report this because the this behavior is well-defined by the language and might be intended by the programmer.
+Enable `-fsanitize=unsigned-integer-overflow` to get a sanitizer warning on this.
+Also, beware that infinite loops without side effects are undefined behavior so depending on what the loop body does you may actually have more serious problems than an infinite loop [(85)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p2809r2.html).
+
 
 ## Looping Over Two Containers
 
@@ -1095,6 +1194,15 @@ The take-away from this example is to avoid adding integers that can be large.
 Try to rewrite the computation, and strive to use offsets instead of absolute values.
 
 
+# Detecting Error States
+
+With signed integers we can test for negative vales where we only expect negative values.
+With unsigned that isn't as obvious, but we can set a maximum allowed value and flag any value above that limit as possibly incorrectly calculated.
+
+With signed integers we can use sanitizers and `-ftrapv` to detect under- and overflow.
+There are sanitizers that do the same for unsigned integers as well, `-fsanitize=unsigned-integer-overflow` [(55)](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html), but we may get false positives since there are valid cases for unsigned calculations that wrap.
+
+
 # Computing Distance Between Indices
 
 We cannot compute distances between values like we normally would when using unsigned integers.
@@ -1417,4 +1525,6 @@ Not sure that this is a good idea.
 - 82: [_The Lakos Rule_ by Arthur O'Dwyer @ quuxplueone.github.io 2018](https://quuxplusone.github.io/blog/2018/04/25/the-lakos-rule/)
 - 83: [_Conservative use of noexcept in the Library_ by Alisdair Meredith, John Lakos @ open-std.org 2011](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2011/n3279.pdf)
 - 84: [_A Guide to Undefined Behavior in C and C++_ by John Regehr @ regehr.org 2010](https://blog.regehr.org/archives/213)
+- 85: [_P2809R2 Trivial infinite loops are not Undefined Behavior_ by JF Bastien @ open-std.org 2023](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p2809r2.html)
+- 86: [_Divide a signed integer by a power of 2_ by Gustavo Blehart, aka.nice @ stackoverflow.com 2016](https://stackoverflow.com/questions/39691817/divide-a-signed-integer-by-a-power-of-2)
 
