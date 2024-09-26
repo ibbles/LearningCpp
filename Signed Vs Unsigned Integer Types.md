@@ -168,6 +168,8 @@ While not guaranteed by the standard, it is assumed that `size_t` and `ptrdiff_t
 We assume a 64-bit machine, i.e. 64-bit `intptr_t`, `size_t` and `ptrdiff_t`, with 32-bit `int`.
 Some results are different on other machines.
 
+We assume that signed integers are represented by two's complement, something that has only recently been required by the language standard.
+
 In this note `integer_t` is an integer type that is an alias for either `size_t` or `ptrdiff_t` depending on if we use signed or unsigned indexing.
 It is used in code snippets where the surrounding text discusses the various ways the code fails with either type.
 The generic `integer_t` code snipped is often followed by a specific `size_t` and / or `ptrdiff_t` snippet with additional checks.
@@ -490,6 +492,10 @@ See _Disadvantages Of Unsigned_ > _Impossible To Reliable Detect Underflow_.
 With a signed integer type we can use tools such as sanitizers [(55)](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html) to detect and signal signed integer over- and underflow in our testing pipeline.
 This won't detect cases in production though, which is a cause for concern, since we usually don't ship binaries built with sanitizers enabled [53](https://lemire.me/blog/2019/05/16/building-better-software-with-better-tools-sanitizers-versus-valgrind/).
 We can also compile with the `-ftrapv` flag to catch signed under- and overflow [(54)](https://gcc.gnu.org/onlinedocs/gcc/Code-Gen-Options.html).
+
+We must ensure we never cause an overflow when computing indices or buffer sizes [(37)](https://wiki.sei.cmu.edu/confluence/display/c/INT30-C.+Ensure+that+unsigned+integer+operations+do+not+wrap).
+It doesn't matter, from a correctness point of view, if the result is defined by the language or not, it is still wrong.
+
 
 ## Changing The Type Of A Variable Or Return Value
 
@@ -1193,15 +1199,193 @@ Better to fail early [(80)](https://www.martinfowler.com/ieeeSoftware/failFast.p
 The take-away from this example is to avoid adding integers that can be large.
 Try to rewrite the computation, and strive to use offsets instead of absolute values.
 
+## Compute A Size From A (Element Size, Element Count) Pair
 
+It is common to compute a buffer size by multiplying an element size with an element count.
+```cpp
+integer_t compute_size(integer_t num_elements, integer_t element_size)
+{
+	return num_elements * element_size;
+}
+```
+This is at risk of overflow.
+
+A real-world example of a vulnerability caused by a an integer overflow is the following code from the SVG viewer in Firefox 2.0 [(38)](https://bugzilla.mozilla.org/show_bug.cgi?id=360645) where a buffer to hold vertices is allocated:
+```cpp
+pen->num_vertices = _cairo_pen_vertices_needed(
+	gstate->tolerance, radius, &gstate->ctm);
+pen->vertices = malloc(
+	pen->num_vertices * sizeof(cairo_pen_vertex_t));
+```
+
+When multiplied with `sizeof(cairo_pen_vertex_t)` the computation overflows and the buffer allocated becomes too small to hold the vertex data.
+The fix in this case was to detect very large vertex counts and reject the SVG file.
+```cpp
+pen->num_vertices = _cairo_pen_vertices_needed(
+	gstate->tolerance, radius, &gstate->ctm);
+
++    /* Make sure we don't overflow the size_t for malloc */
++    if (pen->num_vertices > 0xffff)
++    {
++        return CAIRO_STATUS_NO_MEMORY;
++    }
+
+pen->vertices = malloc(
+	pen->num_vertices * sizeof(cairo_pen_vertex_t));
+```
+
+Another option is to use a more lenient rejection limit and let `malloc` decide if there is enough virtual memory available or not.
+```cpp
+pen->num_vertices = _cairo_pen_vertices_needed(
+	gstate->tolerance, radius, &gstate->ctm);
+
++  if (pen->num_vertices > SIZE_MAX / sizeof(cairo_pen_vertex_t))
++  {
++    return CAIRO_STATUS_NO_MEMORY;
++  }
+
+pen->vertices = malloc(
+	pen->num_vertices * sizeof(cairo_pen_vertex_t));
+```
 # Detecting Error States
 
-With signed integers we can test for negative vales where we only expect negative values.
-With unsigned that isn't as obvious, but we can set a maximum allowed value and flag any value above that limit as possibly incorrectly calculated.
+With signed integers we can test for negative vales where we only expect positive values.
+With unsigned it isn't as obvious, but we can set a maximum allowed value and flag any value above that limit as possibly incorrectly calculated.
 
 With signed integers we can use sanitizers and `-ftrapv` to detect under- and overflow.
 There are sanitizers that do the same for unsigned integers as well, `-fsanitize=unsigned-integer-overflow` [(55)](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html), but we may get false positives since there are valid cases for unsigned calculations that wrap.
 
+
+## Detecting Overflow
+
+The purpose of this code is to compute an index and use it if and only if the computation didn't cause an under- or overflow.
+Overflow detection with unsigned integers, two variants.
+```cpp
+bool work(
+	Container& container, size_t const base, size_t const offset)
+{
+	// Detect the case where there isn't enough room
+	// above base to fit offset.
+	if (std::numeric_limits<size_t>::max() - base < offset)
+	{
+		report_error("Overflow in index calculation.");
+		return false;
+	}
+
+	size_t const index = base + offset;
+	// Work with container[index].
+	return true;
+}
+
+bool work(Container& container, size_t base, size_t offset)
+{
+	// Unconditionally compute the index, detect overflow
+	// by checking if it appears as-if we walked backwards,
+	// which is impossible with unsigned integers in the
+	// absence of wrapping.
+	size_t const index = base + offset;
+	if (index < base)
+	{
+		report_error("Overflow in index calculation.");
+		return false;
+	}
+
+	// Workd with container[index}.
+	return true;
+}
+```
+
+Overflow detection with signed integers.
+We can't do the check after the arithmetic operation since signed under- and overflow is undefined behavior.
+We also can't do the unexpectedly-less-than-base check since in this case the offset might actually intentionally be negative causing the computed index to be less than `base`.
+Instead we must do all checking up-front and we must handle a bunch of different cases [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc?t=2911).
+```cpp
+bool work(Container& container, ptrdiff_t base, ptrdiff_t offset)
+{
+	if (base ^ offset >= 0)
+	{
+		// If the result of XOR is positive, i.e. sign bit is not set, then
+		// the two values must have had the same sign since XOR produces a
+		// 0-bit, i.e. a positive value when the bit is the sign bit, if
+		// and only if the two input bits, i.e. the two sign bits, are equal.
+
+		if (base >= 0)
+		{
+			// Adding a positive offset to a positive base. Make sure there
+			// is enough room above the base to fit the offset.
+			if (std::numeric_limits<ptrdiff_t>::max - base <= offset)
+			{
+				report_error("Overflow in index calculation.");
+				return false;
+			}
+		}
+		else
+		{
+			// Adding a negative offset to a negative base. Basically the
+			// same situation as the code block above, but we need to check
+			// against the minimum value instead of the maximum since adding
+			// a negative value will move towards the minimum value.
+			if (std::numeric_limits<std::ptrdiff_t>::min() - base <= offset)
+			{
+				report_error("Overflow in index calculations.");
+				return false;
+			}
+		}
+	}
+	// No else-case necessary since if the two values have different sign then
+	// there is no way that adding them can cause an under- or overflow. If the
+	// signs are different then the addition would need to first walk the
+	// distance to zero and then all the way to the minimum or maximum value,
+	// and then some more to overflow. But the maximum value offset can have is
+	// bounded by that zero-to-max/min distance so it cannot be large enough to
+	// encompass both that distance and the steps from base to zero.
+	//
+	// So the addition is guarateed to be overflow-free.
+	//
+	// I think. I'm not sure the fact that signed integers have a
+	// non-symmetrical value distribution between signed and unsigned values
+	// doesn't mess this up somewhere.
+
+	ptrdiff_t const index = base + offset.
+	// Work with container[index].
+	return true;
+}
+```
+
+
+(
+I'm not 100% sure that the above overflow detection for signed integers is correct.
+It is based on a code snippet similar to the following from [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc?t=2911) but with the conditions inverted to early-fail instead of early success.
+```cpp
+bool can_add(std::ptrdiff_t base, std::ptrdiff_t offset)
+{
+	if (base ^ offset < 0)
+	{
+		return true;
+	}
+	else
+	{
+		if (base >= 0)
+		{
+			if (std::numeric_limits<std::ptrdiff_t>::max() - base > offset)
+			{
+				return true;
+			}
+		}
+		else
+		{
+			if (std::numeric_limits<std::ptrdiff_t>::min() - base > offset)
+			{
+				return true;
+			}
+		}
+	}
+
+	return false;
+```
+)
+
+Similar checks exists for subtraction and multiplication as well [(37)](https://wiki.sei.cmu.edu/confluence/display/c/INT30-C.+Ensure+that+unsigned+integer+operations+do+not+wrap).
 
 # Computing Distance Between Indices
 
@@ -1310,6 +1494,8 @@ Don't use unsigned when you need:
 - mathematical operations [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
 - compare magnitudes [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
 
+To make it clear when a conversion is happening, always use `static_cast` instead of relying on implicit conversions.
+
 Build with `-Wconversion`.
 Use a library for sane signed+unsigned comparisons [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch), [(71)](https://en.cppreference.com/w/cpp/utility/intcmp).
 
@@ -1341,6 +1527,32 @@ Don't use explicit indices at all, do something else instead.
 - The ranges library.
 - Named algorithms.
 - Iterators.
+
+A strategy for avoiding many of the above bugs is to not use indices at all and instead prefer range based loops, named algorithms, iterators, the ranges library, ... (TODO More tips?).
+A drawback of iterators is that for some containers, such as `std::vector`, they can become invalidated at times where an index would not.
+
+
+Where possible, instead of passing an array and a size, pass a view and use ranged based loop instead of an indexing loop:
+```cpp
+// Old:
+void work(byte* data, int size)
+{
+	for (int i = 0; i < size; ++i)
+	{
+		// Do work with data[i].
+	}
+}
+
+// New:
+void work(std::span<byte> data)
+{
+	for (byte& b : data)
+	{
+		// Do work with b.
+	}
+}
+```
+
 
 Rust has a range based loop construct that has built-in support for backwards looping [25](https://graphitemaster.github.io/aau/).
 ```rust
