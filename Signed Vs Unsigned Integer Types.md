@@ -142,6 +142,9 @@ Not everyone agrees [(9)](https://www.learncpp.com/cpp-tutorial/stdvector-and-th
 It may be that it was the correct decision at the time, but things changed (e.g. 16-bit to 32-bit to 64-bit CPUs.) and now we are stuck with what we have for legacy / consistency / backwards compatibility reasons.
 The design of any API that is difficult to change by definition happens before widespread usage of that API, and it is not until widespread usage we we discover real-world implications that wasn't though of beforehand.
 
+Since the standard library containers use `std::size_t`, it is not unreasonable that our code using then also should.
+By making our own container classes similar to the standard library containers we make them familiar to other C++ programmers [(18)](https://softwareengineering.stackexchange.com/questions/338088/size-t-or-int-for-dimensions-index-etc).
+
 There is `std::ssize(const T& container)` that returns the size of the container as a signed integer.
 
 I don't know of any way to index with a signed index, other than passing in the signed index and letting it implicit convert to the unsigned equivalent or do the cast explicitly.
@@ -523,18 +526,67 @@ This chapter lists some common bugs that we should look out for when reading or 
 - Unintended underflow or overflow.
 - Performing an illegal operation.
 
-# When To Use Signed And When To Use Unsigned
+# Representing A Value That Cannot Be Negative
 
-In some cases it is clear which variant should be used.
-If you need modular arithmetic and don't need negative numbers then use unsigned.
-If the value doesn't represent a number but a bit field, flags, a hash, or an ID then also use unsigned.
-The determining factor is whether the values will be used for arithmetic beyond bit operations.
-A topic of contention is what to use for values that should never be negative but are used in arithmetic expressions.
-For example counts and array indices.
-One recommendation is to use unsigned to signal that the value should never be negative.
-Another recommendation is to always use signed even in this case.
-- [_Google C++ Style Guide_ > _Integers_](https://google.github.io/styleguide/cppguide.html#Integer_Types)
-- [_Learn C++_ > _4.5 — Unsigned integers, and why to avoid them_ @ learncpp.com](https://www.learncpp.com/cpp-tutorial/unsigned-integers-and-why-to-avoid-them/)
+Using unsigned is a natural choice when working with non-negative quantities such as indices and counts [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [25](https://graphitemaster.github.io/aau/). [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/). [(68)](https://github.com/ericniebler/stl2/issues/182).
+It clearly signals the limitation on the domain of the value.
+It doesn't make sense for a container to have a negative size so we should use a type that encodes this into the type system.
+If we use a signed type then we force the user to consider what it would mean for a size or index to be negative, and what to do in that case.
+
+Taking it one step further.
+Proponents of signed integers say that unsigned integers doesn't model natural numbers, instead they model the ℤ/n ring, which is another concept (citation needed).
+As programmers we don't need to care about that unless we chose to, i.e. unless we chose to write our code to take wrapping into account and either exploit or prevent it.
+As an alternative, we can pretend that wrapping isn't a thing if we place the requirement on the application's users that they may never provide input that causes any value to wrap.
+
+(I know nothing about torsors, this is a my simplified explanation of the descriptions I've seen.)
+Another way to view the set of unsigned values is to relate them to torsors [(58)](https://math.ucr.edu/home/baez/torsors.html), [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+A torsor is a value that encodes some quantities relative to some arbitrarily chosen reference point.
+A torsor is the opposite of an absolute value.
+For any measurement we can chose a reference point so that the measured value is positive.
+When talking about indices into a container we note that they are not torsors, there is a well-defined location that the index is relative to: the start of the container [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+`std::ptrdiff_t` on the other hand, represents the subtraction between two indices, which is a torsor describing the location of the first index relative to the second.
+That is why the index type `std::size_t` is unsigned and the signed torsor variant `std::ptrdiff_t` is used to represent differences between indices.
+
+Restricting what values can be passed to a function through the type system is a good way to communicate how the function is meant to be used to both programmers and the compiler [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU), [(73)](https://news.ycombinator.com/item?id=2364065).
+It simplifies the written documentation required.
+
+At least it would be good if we didn't have implicit signed → unsigned conversions [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+And if arithmetic over- and underflow was an error instead of wrapping.
+Passing a negative signed value into a function taking an unsigned parameter is a common source of bugs [(15)](https://youtu.be/Puio5dly9N8?t=2561),
+making the parameter an unsigned integer type doesn't protect us from that unfortunately, it simply hides it [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+Expressions that should have resulted in a negative value instead becomes a positive value, i.e. it conforms to the restrictions of the interface even though it really should not.
+Using a signed type reveals the bug instead [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU), which is better.
+
+By definition, `std::size_t` is a type large enough to hold the size of any object.
+Therefore it is the type returned by `sizeof()`.
+Therefore, any time you wish to work with the size of objects in bytes, you should use `std::size_t` [(18)](https://softwareengineering.stackexchange.com/questions/338088/size-t-or-int-for-dimensions-index-etc).
+For consistency, we should also use `std::size_t` for other sizes, such as the number of elements in a container.
+
+An unsigned integer can address twice as many container elements as an equally-sized signed integer can [(33)](https://stackoverflow.com/questions/10040884/signed-vs-unsigned-integers-for-lengths-counts), [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java), [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
+If you don't need a sign then don't spend a bit on it.
+When no negative numbers are required, unsigned integers are well-suited for networking (I have a source for this, but forgot to add it h ere.) and systems with little memory, because unsigned integers can store more positive numbers without taking up extra memory.
+The extra range may be important when the index type is small [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), [(18)](https://softwareengineering.stackexchange.com/questions/338088/size-t-or-int-for-dimensions-index-etc), such as 16 or possibly even 32-bit in some cases.
+On 32-bit machines we don't want to be limited to 2 GiB `std::byte` buffers since we have up to 4 GiB of address space.
+This is not a problem for element types larger than a single byte since by then even a signed integer is able to address all of memory due to the size multiplication.
+
+In many cases we can use a larger signed type instead of a small unsigned type to get more range.
+The signed option gives even more range [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+
+I'm not sure when only having half the range will become a problem for 64-bit signed indices, the largest `std::ptrdiff_t` value is 9'223'372'036'854'775'807.
+For most modern applications on modern hardware the extra bit is not necessary [(15)](https://youtu.be/Puio5dly9N8?t=2561), the range limitation does not come up in practice very much.
+The limitation only comes into effect when the container contains single-byte elements such as char,
+with any larger type we run out of addressable memory for the data before we run out of index values in a signed integer.
+Unsigned are sort of legacy of small bit sized machines where the extra bit mattered for range [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+
+If we chose a signed integer instead then we need to motivate the loss of maximum size.
+
+However, having the extra bit does not mean it is actually used [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
+At least [GCC's standard library implementation of `st::vector` is limited](https://github.com/gcc-mirror/gcc/blob/releases/gcc-11.4.0/libstdc%2B%2B-v3/include/bits/stl_vector.h#L1776) to the range of `std::ptrdiff_t`, and the same is stated under _Note_ on [cppreference.com/vector/max_size](https://en.cppreference.com/w/cpp/container/vector/max_size).
+Maybe `std::deque` can handle larger container sizes since it doesn't use a continuous memory buffer for all elements.
+
+
+[The idea that 'signed types are safer' is nonsense](https://www.reddit.com/r/cpp_questions/comments/1ehc50j/comment/lfzonsz/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button).
+
 
 # Test If An Index Is Valid
 ## Test If An Index Is Valid For A Container
@@ -1476,6 +1528,19 @@ See _Midpoint, i.e. "Midpoint, i.e Nearly All Binary Searches Are Broken"_ for d
 
 The typical way of finding the middle of an index range is `mid = low + (high - low) / 2;
 This works for all unsigned values (citation/test needed) as long as `low` is less than or equal to `high`, but signed is susceptible to overflow if `high` is large and `low` is negative.
+
+# When To Use Signed And When To Use Unsigned
+
+In some cases it is clear which variant should be used.
+If you need modular arithmetic and don't need negative numbers then use unsigned.
+If the value doesn't represent a number but a bit field, flags, a hash, or an ID then also use unsigned.
+The determining factor is whether the values will be used for arithmetic beyond bit operations.
+A topic of contention is what to use for values that should never be negative but are used in arithmetic expressions.
+For example counts and array indices.
+One recommendation is to use unsigned to signal that the value should never be negative.
+Another recommendation is to always use signed even in this case.
+- [_Google C++ Style Guide_ > _Integers_](https://google.github.io/styleguide/cppguide.html#Integer_Types)
+- [_Learn C++_ > _4.5 — Unsigned integers, and why to avoid them_ @ learncpp.com](https://www.learncpp.com/cpp-tutorial/unsigned-integers-and-why-to-avoid-them/)
 
 # Recommendations
 
