@@ -593,16 +593,21 @@ Maybe `std::deque` can handle larger container sizes since it doesn't use a cont
 
 It is common for index ranges to be valid from zero to some positive number, such as the size of a container.
 With a signed integer type we must check both the lower and upper end of the range.
-With an unsigned integer we only need to check the upper range since the lower bound is built into the type [(28)](https://gustedt.wordpress.com/2013/07/15/a-praise-of-size_t-and-other-unsigned-types/).
+With an unsigned integer we only need to check the upper range since the lower bound is built into the type [(28)](https://gustedt.wordpress.com/2013/07/15/a-praise-of-size_t-and-other-unsigned-types/), [(36)](https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR50-CPP.+Guarantee+that+container+indices+and+iterators+are+within+the+valid+range), [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java), [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
 
 Unsigned integer for both the size and the index:
 ```cpp
 template <typename Container>
-bool isValidIndex(Container& const container, size_t index)
+bool isValidIndex(Container& const container, size_t const index)
 {
 	return index < container.size();
 }
 ```
+
+This assumes the computation of `index` didn't under- or overflow before we got here, which is impossible to detect after the fact.
+The situation is made worse if we don't have an known upper bound to check against,
+such as when resizing a container.
+See _Detecting Error States_ > _Detecting Overflow_ for a longer discussion on this.
 
 Signed index for both the size and the index:
 ```cpp
@@ -610,6 +615,29 @@ template <typename Container>
 bool isValidIndex(Container& const container, ptrdiff_t index)
 {
 	return index >= 0 && index < container.size();
+}
+```
+
+Using unsigned integers may come with a performance improvement dues to the lower number of instructions, but that is unlikely to be the case on a modern computer in most cases since the number of loads is the same and ALU saturation is rarely the limiting factor for execution speed [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf).
+
+We can invert the logic to get a check for invalid indices.
+```cpp
+bool work(Container& container, size_t const index)
+{
+	if (index >= container.size())
+		return false;
+
+	// Work with container[index].
+	return true;
+}
+
+bool work(Container& container, ptrdiff_t const index)
+{
+	if (index < 0 || index >= container.size())
+		return false;
+
+	// Work with container[index].
+	return true;
 }
 ```
 
@@ -655,6 +683,8 @@ bool isValidIndex(const Container& container, ptrdiff_t index)
 ```
 
 The above `static_assert` passes for `std::vector<char>`.
+
+
 
 ## Test If An Index Is Valid For A Begin / End Pointer Pair
 

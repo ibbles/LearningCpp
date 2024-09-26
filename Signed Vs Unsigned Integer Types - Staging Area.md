@@ -31,26 +31,6 @@ The intention is to move piece by piece from this note to [[Signed Vs Unsigned I
 
 # Advantages Of Unsigned
 
-## Single-Comparison Range Checks
-
-Only need to check one side of the range for indexing [(36)](https://wiki.sei.cmu.edu/confluence/display/cplusplus/CTR50-CPP.+Guarantee+that+container+indices+and+iterators+are+within+the+valid+range), [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java), [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
-
-```cpp
-// Unsigned index.
-if (index >= container.size())
-
-// Signed index.
-if (index < 0 || index >= container.size())
-```
-
-This assumes the computation of `index` didn't underflow before we got here, which is impossible to detect after the fact.
-The situation is made worse if we don't have an known upper bound to check against,
-such as when resizing a container.
-See _Disadvantages Of Unsigned_ > _Impossible To Detect Underflow_ for a longer discussion on this.
-
-This may come with a performance improvement dues to the smaller number of instructions,
-but that is unlikely on a modern computer in most cases since the number of loads is the same and ALU saturation is rarely the limiting factor for execution speed [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf).
-
 ## Under- And Overflow Is Not Undefined Behavior
 
 It's not too bad to have under- or overflow in our loop iterations because at least it isn't undefined behavior  [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing), instead it wraps.
