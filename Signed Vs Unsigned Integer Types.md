@@ -409,35 +409,7 @@ And the rest of the computation is just garbage.
 It doesn't help that `b` represents a value that "can never be negative", it still causes problems.
 
 This types of weirdness can limit the optimizer [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
-If we put the above code into a function and make some of the values parameters and other compile time constants we get the following:
-```cpp
-int32_t work(uint32_t b)
-{
-	int32_t a = -2;
-	int32_t c = 2;
-	int32_t d = (a - b) / c + 10;
-	return d;
-}
-```
-It would be good for performance if the compiler had been able to rewrite the expression as follows:
-- `(a - b) / c + 10`
-- `(-2 - b) / 2 + 10`
-- `(-2 / 2) - (b / 2) + 10`
-- `-1 + 10 - (b >> 1)`
-- `9 - (b >> 1)`
-
-Fewer operations and the division, which is fairly expensive, has been replaced with a right-shift.
-Alas, this transformation is not legal when `b` is unsigned due to the possibility of wrapping.
-This is the assembly code produced by Clang 18.1 [(52)](https://godbolt.org/z/41MazoGW7):
-```S
-work(unsigned int):
-movl    $-2, %eax   # eax = -2.   eax = a.
-subl    %edi, %eax  # eax -= edi. eax = a - b.
-shrl    %eax        # eax >>= 1.  eax = (a - b) / 2.
-addl    $10, %eax   # eax += 10.  eax = ((a - b) / 2) + 10.
-retq
-```
-The above assembly code implements the C++ expression pretty much as written.
+See _Compiler Optimization_ > _Algebraic Expression Manipulation_.
 
 While the wrapping behavior of unsigned integers can be surprising and often not what we want, it is at least well-defined and we can reason about the results produces by a misbehaving program [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
 With well defined behavior for the under- and overflow after a bug had been identified it is possible to read the C++ code and understand what happened [(66)](https://www.learncpp.com/cpp-tutorial/unsigned-integers-and-why-to-avoid-them/#comment-487024).
@@ -1324,6 +1296,10 @@ pen->num_vertices = _cairo_pen_vertices_needed(
 pen->vertices = malloc(
 	pen->num_vertices * sizeof(cairo_pen_vertex_t));
 ```
+
+# Wide Contracts
+
+ [(82)](https://quuxplusone.github.io/blog/2018/04/25/the-lakos-rule/), [(83)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2011/n3279.pdf) 
 # Detecting Error States
 
 With signed integers we can test for negative vales where we only expect positive values.
@@ -1609,6 +1585,38 @@ The signed version has a lot more instructions in order to handle the cases wher
 
 
 ## Algebraic Expression Manipulation
+
+Unsigned integers does not follow the regular algebraic rules [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
+Consider the following function where the returned value is computed from a runtime parameter and a few compile-time constants.
+```cpp
+int32_t work(uint32_t b)
+{
+	int32_t a = -2;
+	int32_t c = 2;
+	int32_t d = (a - b) / c + 10;
+	return d;
+}
+```
+It would be good for performance if the compiler had been able to rewrite the expression as follows:
+- `(a - b) / c + 10`
+- `(-2 - b) / 2 + 10`
+- `(-2 / 2) - (b / 2) + 10`
+- `-1 + 10 - (b >> 1)`
+- `9 - (b >> 1)`
+
+Fewer operations and the division, which is fairly expensive, has been replaced with a right-shift.
+Alas, this transformation is not legal when `b` is unsigned due to the possibility of wrapping.
+This is the assembly code produced by Clang 18.1 [(52)](https://godbolt.org/z/41MazoGW7):
+```S
+work(unsigned int):
+movl    $-2, %eax   # eax = -2.   eax = a.
+subl    %edi, %eax  # eax -= edi. eax = a - b.
+shrl    %eax        # eax >>= 1.  eax = (a - b) / 2.
+addl    $10, %eax   # eax += 10.  eax = ((a - b) / 2) + 10.
+retq
+```
+The above assembly code implements the C++ expression pretty much as written.
+
 
 Slightly more complicated example:
 ```cpp
