@@ -385,6 +385,7 @@ if (index < 0 || index >= data.size())
 ## Integer Over- / Underflow And Wrapping
 
 Wrapping is the act of truncating away the bits beyond those supported by the type we are using.
+This makes the value jump from one end of the value range to the other.
 If you add 1 to the largest value an unsigned integer type can hold then the value doesn't become one larger, it wraps around back to zero.
 Similarly, if you subtract one from an unsigned zero you don't get -1, instead the value wrap around to the largest value the type supports.
 This violates our intuition of regular arithmetic [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/), especially when it happens with intermediate results.
@@ -411,6 +412,11 @@ It doesn't help that `b` represents a value that "can never be negative", it sti
 This types of weirdness can limit the optimizer [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
 See _Compiler Optimization_ > _Algebraic Expression Manipulation_.
 
+Signed integer behaves as most people expect number to behave most of the time.
+`x - y` is negative when `y > x`.
+`x - 1` is less than `x`  for pretty much every value that will show up in practice,
+but it is not true for the most common unsigned number: 0.
+
 While the wrapping behavior of unsigned integers can be surprising and often not what we want, it is at least well-defined and we can reason about the results produces by a misbehaving program [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
 With well defined behavior for the under- and overflow after a bug had been identified it is possible to read the C++ code and understand what happened [(66)](https://www.learncpp.com/cpp-tutorial/unsigned-integers-and-why-to-avoid-them/#comment-487024).
 However, even though the computation of the bad index isn't undefined behavior, using it may be, depending on what it is being used for.
@@ -429,27 +435,25 @@ A value cannot suddenly teleport from one place on the number line to another.
 `(a - b) / c` is always equal to `(a / c) - (b / c)`. (Is this true?)
 "Always" meaning "for all applications that follow the rules".
 Make sure you follow the rules.
+
+More algebra that holds for signed integers but not unsigned integers [(62)](https://news.ycombinator.com/item?id=29769851):
 ```cpp
-int32_t work(int32_t b)
-{
-    int32_t a = -2;
-	int32_t c = 2;
-	int32_t d = (a - b) / c + 10;
-    return d;
-}
+a - b > c
+a - b - c > 0
+a - c > b
 ```
-```S
-work(int):
-movl    $-2, %ecx   # ecx = -2.   ecx = a.
-subl    %edi, %ecx  # ecx -= edi. ecx = a - b.
-movl    %ecx, %eax  # eax = ecx.  eax = a - b.
-shrl    $31, %eax   # eax >>= 31. eax = sign(a - b)
-addl    %ecx, %eax  # eax += ecx. eax = (a - b) + sign(a - b).
-sarl    %eax        # eax >>= 1.  eax = ((a - b) + sign(a - b)) / 2.
-addl    $10, %eax   # eax += 10.  eax = (((a - b) + sign(a - b)) / 2) + 10.
-retq
+
+This can be useful if we know that `a - c` will not under- or overflow, but we are not sure about `a - b`.
+
+These are all equivalent with signed integer but not with unsigned ones [(69)](https://github.com/kryptan/rect_packer/issues/3):
+```cpp
+a - b > 5
+a > b + 5
+a - 5 > b
+a - b - 5 > 0
 ```
-The compiler can't do much even when all values are signed because division by a power-of-two isn't just a shift in this case, depending on whether the dividend is positive or negative we may need to adjust the result of the shift in order to get correct rounding towards zero instead of rounding towards negative infinity, which is what a simple shift would result in [(86)](https://stackoverflow.com/questions/39691817/divide-a-signed-integer-by-a-power-of-2).
+
+Using the type that is more similar to our intuition of how numbers work makes it faster to teach new programmers, and even intermediate programmers will make fewer mistakes (citation needed).
 
 Based on the above, the guideline for deciding if a variable should be signed on unsigned is 
 
@@ -458,6 +462,11 @@ Based on the above, the guideline for deciding if a variable should be signed on
 If yes, then use a signed integer type [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
 If you use an unsigned integer instead and accidentally wrap then you will get well-defined silently incorrect behavior that can be difficult to detect.
 See _Detecting Error States_ > _Detecting Overflow_.
+
+Small negative numbers are more common than very large positive numbers.
+Mixing signed and unsigned numbers adds even more surprising behavior [(41)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf), [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+See _Mixing Signed And Unsigned Integer Types_.
+
 With a signed integer type we can use tools such as sanitizers [(55)](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html) to detect and signal signed integer over- and underflow in our testing pipeline.
 This won't detect cases in production though, which is a cause for concern, since we usually don't ship binaries built with sanitizers enabled [53](https://lemire.me/blog/2019/05/16/building-better-software-with-better-tools-sanitizers-versus-valgrind/).
 We can also compile with the `-ftrapv` flag to catch signed under- and overflow [(54)](https://gcc.gnu.org/onlinedocs/gcc/Code-Gen-Options.html), though this comes with a performance cost.
@@ -1586,6 +1595,24 @@ void work(ptrdiff_t start, ptrdiff_t end)
 ```
 
 
+# Bit Width Conversions
+
+A bit width conversion is when an integer value with one bit width is converted to a different bit width.
+For example `int16_t` to `int64_t`, or `uint64_t` to `uint32_t`.
+Converting between signed and unsigned is not considered a bit width conversion.
+Converting both to a different bit width and a different signedness is actually a two-step process where the value is first sign-converted and then bit width converted.
+
+If you mix values with different bit width then unsigned is more efficient because the conversion is a no-op [(62)](https://news.ycombinator.com/item?id=29767762).
+The value held by a CPU register is always 64-bit, a 16 or 32-bit value has zeros in the unused bits.
+(
+Is this always true, or can there be garbage data in the upper bits? 
+)
+With signed values one must perform sign extension when going from a lower bit-width to a higher [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post19), using e.g. `movsxd`.
+
+On the other hand, with signed values the compiler may not need to do any conversion at all.
+In some cases it can transform the code to use the target type form the start [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post23).
+See _Advantages Of Signed_ > _More Opportunities For Compiler Optimizations_.
+
 # Things That Often Work
 
 This chapter is a summary of implementations that often work but still have cases we must guard for.
@@ -1713,11 +1740,40 @@ wrap_optimization_test(int):
 
 The unsigned version contains fewer instructions because division by a power of two is a single shift-right with unsigned integers, while with signed integers it requires some additional work.
 
+
+```cpp
+int32_t work(int32_t b)
+{
+    int32_t a = -2;
+	int32_t c = 2;
+	int32_t d = (a - b) / c + 10;
+    return d;
+}
+```
+```S
+work(int):
+movl    $-2, %ecx   # ecx = -2.   ecx = a.
+subl    %edi, %ecx  # ecx -= edi. ecx = a - b.
+movl    %ecx, %eax  # eax = ecx.  eax = a - b.
+shrl    $31, %eax   # eax >>= 31. eax = sign(a - b)
+addl    %ecx, %eax  # eax += ecx. eax = (a - b) + sign(a - b).
+sarl    %eax        # eax >>= 1.  eax = ((a - b) + sign(a - b)) / 2.
+addl    $10, %eax   # eax += 10.  eax = (((a - b) + sign(a - b)) / 2) + 10.
+retq
+```
+The compiler can't do much even when all values are signed because division by a power-of-two isn't just a shift in this case, depending on whether the dividend is positive or negative we may need to adjust the result of the shift in order to get correct rounding towards zero instead of rounding towards negative infinity, which is what a simple shift would result in [(86)](https://stackoverflow.com/questions/39691817/divide-a-signed-integer-by-a-power-of-2).
+
+
+## Type Replacement
+
+
 # When To Use Signed And When To Use Unsigned
 
 In some cases it is clear which variant should be used.
 If you need modular arithmetic and don't need negative numbers then use unsigned.
+Example use-cases include cryptography, check sums, hash functions, timers.
 If the value doesn't represent a number but a bit field, flags, a hash, or an ID then also use unsigned.
+
 The determining factor is whether the values will be used for arithmetic beyond bit operations.
 A topic of contention is what to use for values that should never be negative but are used in arithmetic expressions.
 For example counts and array indices.
@@ -1726,18 +1782,34 @@ Another recommendation is to always use signed even in this case.
 - [_Google C++ Style Guide_ > _Integers_](https://google.github.io/styleguide/cppguide.html#Integer_Types)
 - [_Learn C++_ > _4.5 — Unsigned integers, and why to avoid them_ @ learncpp.com](https://www.learncpp.com/cpp-tutorial/unsigned-integers-and-why-to-avoid-them/)
 
+## Reasons For Using Unsigned
+
+Most Values Are Positive And Positive Values Rarely Mix With Negative Values [(6)](https://www.reddit.com/r/cpp_questions/comments/1ej5mo0/comment/lgcbrh0/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button), [25](https://graphitemaster.github.io/aau/).
+A better way to put it is that there are domains in which negative values simply doesn't show up, and in those domains it is safe to use an unsigned integer type [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+(
+TODO List a few such domains.
+)
+
+The Type Used By Real Programmers
+Unsigned unsigned integers is absolutely safe if you know what you are doing and make no mistakes [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
+If you get burned by any of the pitfalls associated with using unsigned integers then you are a bad programmer [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
+We should not allow programmers to switch their brains off because signed overflow is "unlikely" to happen [(62)](https://news.ycombinator.com/item?id=29766658).
+Good tools create weak programmers, programming should be tough [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
+It is what God intended [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
+
+## Reasons For Using Signed
+
+
 # Recommendations
 
 What can a programmer do today to avoid as many pitfalls as possible?
 
-Don't use unsigned for quantities [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
-
-Don't do math on unsigned types [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
-
-Don't mix signed and unsigned types [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
-
-Use unsigned only for:
-- bitmasks [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+- Don't use unsigned for quantities [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+- Don't do math on unsigned types [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+- Don't mix signed and unsigned types [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+- Use unsigned only for:
+	- bitmasks [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+	- modular arithmetic 
 
 Don't use unsigned when you need:
 - mathematical operations [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
