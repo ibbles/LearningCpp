@@ -31,55 +31,6 @@ The intention is to move piece by piece from this note to [[Signed Vs Unsigned I
 
 # Advantages Of Unsigned
 
-## Easier To Write Code That Is Correct For All Input
-
-It is easier to write code that covers all possible cases when using unsigned integers [(62)](https://news.ycombinator.com/item?id=29767877).
-Consider
-```cpp
-void g(int);
-void f(int x, int y)
-{
-	g(x - y);
-}
-```
-
-Without any checks the `x -  y` expression can both overflow (both `x` and `y` very large) and underflow (`x` very small, `y`  very large).
-It is very rare these cases are explicitly checked for in real-world code bases.
-
-Consider an unsigned variant:
-```cpp
-void g1(unsigned);
-void g2(unsigned);
-void f(unsigned x, unsigned y)
-{
-	if (x >= y)
-		g1(x - y);
-	else
-		g2(y - x);
-}
-```
-
-Assuming `g1` and `g2` are well-defined for all unsigned inputs, so is `f`.
-The separation of `g` into `g1` and `g2` makes it clear that we have two different cases, something is may be important in the signed variant as well, but is so implicitly in the fact that the parameter to `g` may be positive or negative.
-Are we sure that `g(int)` will handle negative values correctly?
-We can be reasonable confident that `g2(unsigned)` handles the `x < y` case correctly since that is it whole reason for existing.
-
-If we do want to handle under- and overflow in the signed integer case we can make use of GCC's arithmetic functions with overflow checking [(65)](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).
-```cpp
-extern void g1(int); 
-extern void g2(int); 
-extern void g3(int); 
-void f(int x, int y)
-{
-  int x_minus_y;
-  if(__builtin_ssubl_overflow(x, y, &x_minus_y))
-	 g1(x_minus_y);
-  else if(x > y)
-	 g2(/* What do we pass here? */); // Overflow.
-  else
-	 g3(/* What do we pass here? */); // Underflow.
-}
-```
 
 ## Bit Width Conversions Cheaper
 

@@ -1299,7 +1299,60 @@ pen->vertices = malloc(
 
 # Wide Contracts
 
- [(82)](https://quuxplusone.github.io/blog/2018/04/25/the-lakos-rule/), [(83)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2011/n3279.pdf) 
+A function with a wide contract is one that behaves correctly for all possible inputs [(82)](https://quuxplusone.github.io/blog/2018/04/25/the-lakos-rule/), [(83)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2011/n3279.pdf) .
+The alternative is a narrow contract, which means that only a subset of all possible inputs are legal and passing illegal inputs may lead to the program misbehaving.
+
+It is easier to write code that covers all possible cases when using unsigned integers [(62)](https://news.ycombinator.com/item?id=29767877).
+Consider the following bit of code.
+```cpp
+void g(int);
+
+void f(int x, int y)
+{
+	g(x - y);
+}
+```
+
+Without any checks the `x -  y` expression can both overflow (both `x` and `y` very large) and underflow (`x` very small, `y`  very large).
+It is very rare these cases are explicitly checked for in real-world code bases.
+
+Consider an unsigned variant:
+```cpp
+void g1(unsigned);
+void g2(unsigned);
+
+void f(unsigned x, unsigned y)
+{
+	if (x >= y)
+		g1(x - y);
+	else
+		g2(y - x);
+}
+```
+
+Assuming `g1` and `g2` are well-defined for all unsigned inputs, so is `f`.
+The separation of `g` into `g1` and `g2` makes it clear that we have two different cases, something that may be important in the signed variant as well, but is so implicitly in the fact that the parameter to `g` may be positive or negative.
+Are we sure that `g(int)` will handle negative values correctly?
+We can be reasonable confident that `g2(unsigned)` handles the `x < y` case correctly since that is it whole reason for existing.
+
+If we do want to handle under- and overflow in the signed integer case we can make use of GCC's arithmetic functions with overflow checking [(65)](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).
+```cpp
+extern void g1(int); 
+extern void g2(int); 
+extern void g3(int); 
+
+void f(int x, int y)
+{
+  int x_minus_y;
+  if(__builtin_ssubl_overflow(x, y, &x_minus_y))
+	 g1(x_minus_y);
+  else if(x > y)
+	 g2(/* What do we pass here? */); // Overflow.
+  else
+	 g3(/* What do we pass here? */); // Underflow.
+}
+```
+
 # Detecting Error States
 
 With signed integers we can test for negative vales where we only expect positive values.
