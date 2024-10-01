@@ -404,7 +404,7 @@ Let's evaluate the above using regular algebraic rules.
 
 Unfortunately, this is not what happens.
 The unsigned `b` taints the entire expression due to the usual arithmetic conversions.
-So `(a - b)` isn't -6, it's 4294967293.
+So `(a - b)` isn't -6, it's 4'294'967'293.
 And the rest of the computation is just garbage.
 It doesn't help that `b` represents a value that "can never be negative", it still causes problems.
 
@@ -416,6 +416,7 @@ int32_t work(uint32_t b)
 	int32_t a = -2;
 	int32_t c = 2;
 	int32_t d = (a - b) / c + 10;
+	return d;
 }
 ```
 It would be good for performance if the compiler had been able to rewrite the expression as follows:
@@ -427,42 +428,37 @@ It would be good for performance if the compiler had been able to rewrite the ex
 
 Fewer operations and the division, which is fairly expensive, has been replaced with a right-shift.
 Alas, this transformation is not legal when `b` is unsigned due to the possibility of wrapping.
-
-```cpp
-__attribute((noinline))
-int32_t wrap_optimization_test(uint32_t b)
-{
-    int32_t a = -2;
-	int32_t c = 2;
-	int32_t d = (a - b) / c + 10;
-    return d;
-}
-```
-this is the assembly code produced by Clang 18.1 [(52)](https://godbolt.org/z/41MazoGW7):
+This is the assembly code produced by Clang 18.1 [(52)](https://godbolt.org/z/41MazoGW7):
 ```S
-wrap_optimization_test(unsigned int):
-# Instructions that evaluate the C++ expression pretty much as written,
-# using a right-shift for the division by 2.
+work(unsigned int):
 movl    $-2, %eax   # eax = -2.   eax = a.
 subl    %edi, %eax  # eax -= edi. eax = a - b.
 shrl    %eax        # eax >>= 1.  eax = (a - b) / 2.
 addl    $10, %eax   # eax += 10.  eax = ((a - b) / 2) + 10.
 retq
 ```
-No DIV instruction, only shifts, and the unsigned version has fewer instructions.
-It does both the subtraction from -2 and the add of 10 so it was prevented from that part of the algebraic transformation.
+The above assembly code implements the C++ expression pretty much as written.
 
-If you do the same, i.e. add beyond the largest value or subtract beyond the smallest value, on a signed integer type you get under- or overflow instead, which is undefined behavior [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
+While the wrapping behavior of unsigned integers can be surprising and often not what we want, it is at least well-defined and we can reason about the results produces by a misbehaving program [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
+With well defined behavior for the under- and overflow after a bug had been identified it is possible to read the C++ code and understand what happened [(66)](https://www.learncpp.com/cpp-tutorial/unsigned-integers-and-why-to-avoid-them/#comment-487024).
+However, even though the computation of the bad index isn't undefined behavior, using it may be, depending on what it is being used for.
+Indexing into an array or `std::vector` would be undefined behavior if the index is out of bounds for the container.
+
+The situation is arguably worse with signed integers [(66)](https://www.learncpp.com/cpp-tutorial/unsigned-integers-and-why-to-avoid-them/#comment-487024).
+If you add beyond the largest value or subtract beyond the smallest value on a signed integer type then you get undefined behavior [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/) instead of wrapping.
 This means that the compiler is allowed to optimize based on the assumption that it never happens.
-Which means that singed integers follow the regular algebraic rules.
+With signed integer that is not possible since under- and overflow is undefined behavior.
+Anything can happen.
+We need to read assembly code from the binary to learn what our program does.
+
+This means that signed integers follow the regular algebraic rules.
 A value cannot suddenly teleport from one place on the number line to another.
 `x + 1` is always larger than `x`.
-`(a - b) / c` is always equal to `(a / c) - (b / c)`.
+`(a - b) / c` is always equal to `(a / c) - (b / c)`. (Is this true?)
 "Always" meaning "for all applications that follow the rules".
 Make sure you follow the rules.
 ```cpp
-__attribute((noinline))
-int32_t wrap_optimization_test(int32_t b)
+int32_t work(int32_t b)
 {
     int32_t a = -2;
 	int32_t c = 2;
@@ -471,9 +467,7 @@ int32_t wrap_optimization_test(int32_t b)
 }
 ```
 ```S
-wrap_optimization_test(int):
-# Instructions that evaluate the C++ expression pretty much as written,
-# using a right-shift and some sign bit trickery for the division by 2.
+work(int):
 movl    $-2, %ecx   # ecx = -2.   ecx = a.
 subl    %edi, %ecx  # ecx -= edi. ecx = a - b.
 movl    %ecx, %eax  # eax = ecx.  eax = a - b.
@@ -491,10 +485,11 @@ Based on the above, the guideline for deciding if a variable should be signed on
 
 If yes, then use a signed integer type [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
 If you use an unsigned integer instead and accidentally wrap then you will get well-defined silently incorrect behavior that can be difficult to detect.
-See _Disadvantages Of Unsigned_ > _Impossible To Reliable Detect Underflow_.
+See _Detecting Error States_ > _Detecting Overflow_.
 With a signed integer type we can use tools such as sanitizers [(55)](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html) to detect and signal signed integer over- and underflow in our testing pipeline.
 This won't detect cases in production though, which is a cause for concern, since we usually don't ship binaries built with sanitizers enabled [53](https://lemire.me/blog/2019/05/16/building-better-software-with-better-tools-sanitizers-versus-valgrind/).
-We can also compile with the `-ftrapv` flag to catch signed under- and overflow [(54)](https://gcc.gnu.org/onlinedocs/gcc/Code-Gen-Options.html).
+We can also compile with the `-ftrapv` flag to catch signed under- and overflow [(54)](https://gcc.gnu.org/onlinedocs/gcc/Code-Gen-Options.html), though this comes with a performance cost.
+We can also compile with `-fwrapv` to eliminate the undefined behavior and get wrapping behavior also with signed integers.
 
 We must ensure we never cause an overflow when computing indices or buffer sizes [(37)](https://wiki.sei.cmu.edu/confluence/display/c/INT30-C.+Ensure+that+unsigned+integer+operations+do+not+wrap).
 It doesn't matter, from a correctness point of view, if the result is defined by the language or not, it is still wrong.
@@ -1340,8 +1335,33 @@ There are sanitizers that do the same for unsigned integers as well, `-fsanitize
 
 ## Detecting Overflow
 
-The purpose of this code is to compute an index and use it if and only if the computation didn't cause an under- or overflow.
-Overflow detection with unsigned integers, two variants.
+Unsigned integers have well-defined under- and overflow behavior: they wrap.
+This means that we can detect it after it has happened, assuming we still have access to the operands.
+```cpp
+bool work(Container& container, size_t const base, size_t const offset)
+{
+	// Unconditionally compute the index, detect overflow
+	// by checking if it appears as-if we walked backwards,
+	// which is impossible with unsigned integers in the
+	// absence of wrapping.
+	size_t const index = base + offset;
+	if (index < base)
+	{
+		report_error("Overflow in index calculation.");
+		return false;
+	}
+
+	// Work with container[index].
+	return true;
+```
+This is a good option to have, but it is rarely used in practice [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+It gets a lot harder if we pass `index` somewhere and that code is responsible for detecting whether a prior calculation wrapped or not.
+
+The above pattern does not work for detecting under- or overflow with signed integers since that is undefined behavior which means that anything can happen.
+The under- or overflow must be prevented from ever happening, we as programmers are responsible for eliminating all possibilities of under- and overflow.
+
+We can detect whether wrapping is about to happen.
+The purpose of the following code is to compute and use an index if and only if the computation can be performed without causing an under- or overflow.
 ```cpp
 bool work(
 	Container& container, size_t const base, size_t const offset)
@@ -1358,28 +1378,11 @@ bool work(
 	// Work with container[index].
 	return true;
 }
-
-bool work(Container& container, size_t base, size_t offset)
-{
-	// Unconditionally compute the index, detect overflow
-	// by checking if it appears as-if we walked backwards,
-	// which is impossible with unsigned integers in the
-	// absence of wrapping.
-	size_t const index = base + offset;
-	if (index < base)
-	{
-		report_error("Overflow in index calculation.");
-		return false;
-	}
-
-	// Workd with container[index}.
-	return true;
-}
 ```
 
-Overflow detection with signed integers.
+Overflow detection with signed integers is more complicated.
 We can't do the check after the arithmetic operation since signed under- and overflow is undefined behavior.
-We also can't do the unexpectedly-less-than-base check since in this case the offset might actually intentionally be negative causing the computed index to be less than `base`.
+We also can't do the unexpectedly-less-than-base check since in the signed case the offset might actually intentionally be negative causing the computed index to be less than `base` without being incorrect.
 Instead we must do all checking up-front and we must handle a bunch of different cases [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc?t=2911).
 ```cpp
 bool work(Container& container, ptrdiff_t base, ptrdiff_t offset)
@@ -1468,6 +1471,13 @@ bool can_add(std::ptrdiff_t base, std::ptrdiff_t offset)
 )
 
 Similar checks exists for subtraction and multiplication as well [(37)](https://wiki.sei.cmu.edu/confluence/display/c/INT30-C.+Ensure+that+unsigned+integer+operations+do+not+wrap).
+
+
+## Detecting Underflow
+
+If an application occasionally miscalculates an index to be negative that might not be noticed if using signed integer for indexing other than difficult-to-diagnose bugs caused by reading valid memory but slightly off from the start of an array, assuming an assert didn't catch it.
+With unsigned integers for indexing the negative value becomes a very large value and likely a segmentation fault or near-infinite loop on the first use [(68)](https://github.com/ericniebler/stl2/issues/182).
+These are both easy to detect in testing [(75)](https://youtu.be/82jVpEmAEV4?t=3830).
 
 # Computing Distance Between Indices
 
@@ -1558,6 +1568,89 @@ See _Midpoint, i.e. "Midpoint, i.e Nearly All Binary Searches Are Broken"_ for d
 
 The typical way of finding the middle of an index range is `mid = low + (high - low) / 2;
 This works for all unsigned values (citation/test needed) as long as `low` is less than or equal to `high`, but signed is susceptible to overflow if `high` is large and `low` is negative.
+
+# Compiler Optimizations
+
+## Dividing By A Power Of Two
+
+For example when an expression contains a division or reminder by a power of two [(73)](https://news.ycombinator.com/item?id=2364065), [(74)](https://www.linkedin.com/pulse/int-uint-question-alex-dathskovsky-).
+```cpp
+__attribute((noinline))
+int mod(int b)
+{
+    return b % 16;
+}
+
+__attribute((noinline))
+int mod(unsigned b)
+{
+    return b % 16;
+}
+```
+
+Clang 18.1 produces
+```S
+mod(int):
+        movl    %edi, %eax
+        leal    15(%rax), %ecx
+        testl   %edi, %edi
+        cmovnsl %edi, %ecx
+        andl    $-16, %ecx
+        subl    %ecx, %eax
+        retq
+
+mod(unsigned int):
+        movl    %edi, %eax
+        andl    $15, %eax
+        retq
+```
+
+The signed version has a lot more instructions in order to handle the cases where `b` is negative.
+
+
+## Algebraic Expression Manipulation
+
+Slightly more complicated example:
+```cpp
+__attribute((noinline))
+int32_t wrap_optimization_test(uint32_t b)
+{
+    int32_t a = -2;
+	int32_t c = 2;
+	int32_t d = (a - b) / c + 10;
+    return d;
+}
+
+__attribute((noinline))
+int32_t wrap_optimization_test(int32_t b)
+{
+    int32_t a = -2;
+	int32_t c = 2;
+	int32_t d = (a - b) / c + 10;
+    return d;
+}
+```
+Clang 18.1 produces [(51)](https://godbolt.org/z/41MazoGW7):
+```S
+wrap_optimization_test(unsigned int):
+        movl    $-2, %eax
+        subl    %edi, %eax
+        shrl    %eax
+        addl    $10, %eax
+        retq
+
+wrap_optimization_test(int):
+        movl    $-2, %ecx
+        subl    %edi, %ecx
+        movl    %ecx, %eax
+        shrl    $31, %eax
+        addl    %ecx, %eax
+        sarl    %eax
+        addl    $10, %eax
+        retq
+```
+
+The unsigned version contains fewer instructions because division by a power of two is a single shift-right with unsigned integers, while with signed integers it requires some additional work.
 
 # When To Use Signed And When To Use Unsigned
 
