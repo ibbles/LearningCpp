@@ -1517,6 +1517,83 @@ If an application occasionally miscalculates an index to be negative that might 
 With unsigned integers for indexing the negative value becomes a very large value and likely a segmentation fault or near-infinite loop on the first use [(68)](https://github.com/ericniebler/stl2/issues/182).
 These are both easy to detect in testing [(75)](https://youtu.be/82jVpEmAEV4?t=3830).
 
+When a signed expression unintentionally produces a negative values we can detect that by simply checking if the result is smaller than 0 [(30)](https://www.aristeia.com/Papers/C++ReportColumns/sep95.pdf).
+That makes error reporting easier, and thus more prevalent [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
+With unsigned integers we can't do that since there can't be any negative values [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone), [(62)](https://news.ycombinator.com/item?id=29766658).
+That means bad values can more easily pass deeper into our code while doing something wrong [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned), possibly leading to security vulnerabilities.
+The original bug is the same, but the impact is different.
+
+In the following the `Container::Container(std::size_t size)` constructor creates a container with `size` elements.
+```cpp
+ptrdiff_t f();
+ptrdiff_t g();
+Container container(f() - g());
+```
+If for some reason `f()` returns a values smaller than `g()` we get a negative value that is implicitly converted to an unsigned `size_t` value.
+
+There is no way to detect this after the fact, the only thing we can do is detect unexpectedly large positive values.
+But where do we draw the line?
+
+See _Disadvantages Of Unsigned_ > _Impossible To Detect Underflow_ for a longer discussion on this.
+(
+TODO Update the above reference.
+)
+
+Error detection like this especially important in public interfaces used by people other than ourselves.
+
+Example inspired by example in [_ES.106: Don’t try to avoid negative values by using unsigned_][https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es106-dont-try-to-avoid-negative-values-by-using-unsigned]:
+```cpp
+short work(unsigned int max, unsigned short x)
+{
+	while (x < max)
+	{
+		x += 100;
+	}
+	return x;
+}
+
+void do_work()
+{
+	work(100'000, 100);
+}
+```
+
+In this case `work` will never return because `x`, being a `short`, can never be equal to or larger than `100'000`.
+Debugging will be required to find the cause for the freeze.
+Had this been done with signed values instead then an undefined behavior sanitizer would have detected and reported the overflow and we would immediately know what the problem was.
+
+For a motivation for why `max` and `x` has different sizes consider a scenario where `max` is actually `std::vector<VertexPosition>::size()` and `x` is the start index in a collection of meshlets each with 100 vertices that are being batched processed, and where it is assumed that each meshlets collection doesn't have more than a few thousands of vertices (So that `unsigned short` is large enough and we want to keep the type small since there may be a large number of meshlets.), and `work`, below `process_meshlets` is responsible for processing a consecutive subset of those meshlets for a limited amount of time:
+```cpp
+#include <chrono>
+using namespace std::chrono;
+
+constexpr unsigned short VERTICES_PER_MESHLET {100};
+
+unsigned short process_meshlets(
+	std::vector<VertexPosition> const& positions,
+	unsigned short start_index,
+	duration max_duration)
+{
+	time_point end_time = steady_clock::now() + max_duration;
+	while (
+		start_index < positions.size()
+		&& stead_clock::now() < end_time
+	)
+	{
+		std::span<VertexPosition> meshlet_vertex_positions {
+			&positions[start_index],
+			VERTICES_PER_MESHLET
+		};
+		process_meshlet(meshlet);
+		
+		// Risk of overflow in this addition.
+		start_index += VERTICES_PER_MESHLET;
+	}
+	return start_index;
+}
+```
+
+
 # Computing Distance Between Indices
 
 We cannot compute distances between values like we normally would when using unsigned integers.
