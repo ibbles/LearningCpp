@@ -563,9 +563,65 @@ Maybe `std::deque` can handle larger container sizes since it doesn't use a cont
 
 [The idea that 'signed types are safer' is nonsense](https://www.reddit.com/r/cpp_questions/comments/1ehc50j/comment/lfzonsz/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button).
 
+# Wide Contracts
 
-# Test If An Index Is Valid
-## Test If An Index Is Valid For A Container
+A function with a wide contract is one that behaves correctly for all possible inputs [(82)](https://quuxplusone.github.io/blog/2018/04/25/the-lakos-rule/), [(83)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2011/n3279.pdf) .
+The alternative is a narrow contract, which means that only a subset of all possible inputs are legal and passing illegal inputs may lead to the program misbehaving.
+
+It is easier to write code that covers all possible cases when using unsigned integers [(62)](https://news.ycombinator.com/item?id=29767877).
+Consider the following bit of code.
+```cpp
+void g(int);
+
+void f(int x, int y)
+{
+	g(x - y);
+}
+```
+
+Without any checks the `x -  y` expression can both overflow (both `x` and `y` very large) and underflow (`x` very small, `y`  very large).
+It is very rare these cases are explicitly checked for in real-world code bases.
+
+Consider an unsigned variant:
+```cpp
+void g1(unsigned);
+void g2(unsigned);
+
+void f(unsigned x, unsigned y)
+{
+	if (x >= y)
+		g1(x - y);
+	else
+		g2(y - x);
+}
+```
+
+Assuming `g1` and `g2` are well-defined for all unsigned inputs, so is `f`.
+The separation of `g` into `g1` and `g2` makes it clear that we have two different cases, something that may be important in the signed variant as well, but is so implicitly in the fact that the parameter to `g` may be positive or negative.
+Are we sure that `g(int)` will handle negative values correctly?
+We can be reasonable confident that `g2(unsigned)` handles the `x < y` case correctly since that is it whole reason for existing.
+
+If we do want to handle under- and overflow in the signed integer case we can make use of GCC's arithmetic functions with overflow checking [(65)](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).
+```cpp
+extern void g1(int); 
+extern void g2(int); 
+extern void g3(int); 
+
+void f(int x, int y)
+{
+  int x_minus_y;
+  if(__builtin_ssubl_overflow(x, y, &x_minus_y))
+	 g1(x_minus_y);
+  else if(x > y)
+	 g2(/* What do we pass here? */); // Overflow.
+  else
+	 g3(/* What do we pass here? */); // Underflow.
+}
+```
+
+# Operations
+## Test If An Index Is Valid
+### Test If An Index Is Valid For A Container
 
 It is common for index ranges to be valid from zero to some positive number, such as the size of a container.
 With a signed integer type we must check both the lower and upper end of the range.
@@ -662,7 +718,7 @@ The above `static_assert` passes for `std::vector<char>`.
 
 
 
-## Test If An Index Is Valid For A Begin / End Pointer Pair
+### Test If An Index Is Valid For A Begin / End Pointer Pair
 
 Sometimes we have a `begin` / `end` pair holding a buffer [(76)](https://youtu.be/DRgoEKrTxXY?t=725).
 The following bounds check is incorrect since the `begin + index` computation may overflow [(77)](https://www.kb.cert.org/vuls/id/162289/).
@@ -719,7 +775,7 @@ bool work(T* begin, T* end, size_t index)
 I think this is correct assuming the buffer pointed to isn't larger than `std::numeric_limits<ptrdiff_t>::max`, in which case the subtraction is undefined behavior.
 For such large buffers I believe the only safe way is to use `(pointer, size)` instead of `(begin, end)`.
 
-## Test If An Index I Valid For A Pointer / Size Pair
+### Test If An Index I Valid For A Pointer / Size Pair
 
 ```cpp
 template <typename T>
@@ -747,8 +803,8 @@ bool work(T* begin, ptrdiff_t size, ptrdiff_t index)
 
 
 
-# Container Loops
-## Loop Over A Container
+## Container Loops
+### Loop Over A Container
 
 Looping over a container, such as an array or an `std::vector` is still a common operation.
 The classical for loop is written as follows:
@@ -810,7 +866,7 @@ Enable `-fsanitize=unsigned-integer-overflow` to get a sanitizer warning on this
 Also, beware that infinite loops without side effects are undefined behavior so depending on what the loop body does you may actually have more serious problems than an infinite loop [(85)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p2809r2.html).
 
 
-## Looping Over Two Containers
+### Looping Over Two Containers
 
 ```cpp
 void work(Container1& container1, Container2& container2)
@@ -830,7 +886,7 @@ What manners of evil may that cause?
 )
 
 
-## Iterating Over All But The Last Element
+### Iterating Over All But The Last Element
 
 Sometimes we need to visit all but the last element of a container [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 The straight-forward way to write this is
@@ -934,7 +990,7 @@ In summary, the initial loop definition works when the container uses signed int
 If the container type supports sizes larger than `std::numeric_limits<ptrdiff_t>::max` then we must explicitly check for the empty case.
 
 
-## Iterating Over A Sub-Range
+### Iterating Over A Sub-Range
 
 Sometimes we need to iterate through a subset of the elements of a container, skipping some number of elements at the start and some number of elements at the end [(28)](https://gustedt.wordpress.com/2013/07/15/a-praise-of-size_t-and-other-unsigned-types/).
 This could for example be to SIMD vectorize the bulk of an array computation but we need to skip a few elements at the front to get to the first vector size aligned element, and we need to skip a few at the end because the remaining elements don't evenly divide the vector size.
@@ -992,7 +1048,7 @@ bool work(Container& container, ptrdiff_t start_skip, ptrdiff_t end_skip)
 An integer type that is unsigned but produces signed results in arithmetic expressions, such as `container.size() - end_skip`, would save us as long as `container.size()` is less than the maximum of the signed integer type (I think.).
 
 
-## Loop Over A Container Backwards
+### Loop Over A Container Backwards
 
 When iterating backwards we need to use different loop termination conditions depending on if the loop counter is signed or unsigned.
 
@@ -1254,7 +1310,7 @@ void work(Container& container)
 }
 ```
 
-### Walking Image Rows Backwards
+#### Walking Image Rows Backwards
 
 Another use-case [(22)](https://stackoverflow.com/questions/16966636/signed-unsigned-integer-multiplication) for a reverse loop is to walk over the rows of a matrix or an image.
 In addition to counting backwards, this code also mixes both signedness and bit widths (here we assume that `std::size_t` is larger than `std::int32_t`) to break things.
@@ -1290,7 +1346,7 @@ The illusion breaks, however, when the bit widths of the pointer and the compute
 The computation of `i * stride` produces a very large number that would be almost a full trip around the value range on a 32-bit machine, bringing us to the next pixel row in the backwards iteration, but on a 64-bit machine that very large 32-bit number isn't all that large compared to 64-bit addresses and when we add a not all that large number to the `Pixel` pointer we get a garbage pointer.
 
 
-# Compute An Index With A Non-Trivial Expression
+## Compute An Index With A Non-Trivial Expression
 
 Not all functions simply loop over a container, sometimes we need to do non-trivial arithmetic to compute the next index.
 This chapter contains a few examples of such cases.
@@ -1315,7 +1371,7 @@ uint64_t index = base + delta;
 - `delta` may be more negative than the value of `base`.
 - `index` may be larger than the size of the container it is used to index into.
 
-## Underflow Is Farther Away From Common Numbers
+### Signed Underflow Is Farther Away From Common Numbers
 
 With signed integers we have a larger margin from commonly used values to the underflow edge [(25)](https://graphitemaster.github.io/aau/), [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned). [(75)](https://youtu.be/82jVpEmAEV4?t=3712).
 Signed values are well-behaved around zero, a common value [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
@@ -1336,7 +1392,8 @@ Some say that this property doesn't have any value [(57)](https://www.reddit.com
 That \[-32768, 32767\] is no better/worse than \[0..65535\], just different.
 That `a < 0` vs `a > 32767` is equivalent.
 
-## Division In Index Calculation
+
+### Division In Index Calculation
 
 ```cpp
 void work(
@@ -1353,7 +1410,7 @@ void work(
 }
 ```
 
-## Midpoint, i.e. "Nearly All Binary Searches Are Broken"
+### Midpoint, i.e. "Nearly All Binary Searches Are Broken"
 
 A step in many algorithms involves finding the midpoint of an index range.
 This is used during binary search, merge sort, and many other divide-and-conquer algorithms [(61)](https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/) [(25)](https://graphitemaster.github.io/aau/).
@@ -1410,7 +1467,7 @@ Better to fail early [(80)](https://www.martinfowler.com/ieeeSoftware/failFast.p
 The take-away from this example is to avoid adding integers that can be large.
 Try to rewrite the computation, and strive to use offsets instead of absolute values.
 
-## Compute A Size From A (Element Size, Element Count) Pair
+### Compute A Size From A (Element Size, Element Count) Pair
 
 It is common to compute a buffer size by multiplying an element size with an element count.
 ```cpp
@@ -1459,63 +1516,41 @@ pen->vertices = malloc(
 	pen->num_vertices * sizeof(cairo_pen_vertex_t));
 ```
 
-# Wide Contracts
+### Negative Intermediate Values
 
-A function with a wide contract is one that behaves correctly for all possible inputs [(82)](https://quuxplusone.github.io/blog/2018/04/25/the-lakos-rule/), [(83)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2011/n3279.pdf) .
-The alternative is a narrow contract, which means that only a subset of all possible inputs are legal and passing illegal inputs may lead to the program misbehaving.
+(TODO Find a good example of this.)
 
-It is easier to write code that covers all possible cases when using unsigned integers [(62)](https://news.ycombinator.com/item?id=29767877).
-Consider the following bit of code.
+In some cases the index computation may produce intermediate negative values.
+This is OK as long as we ultimately end up with a positive value being passed to `operator[]`.
+This works with unsigned integers as long as the computation only involves operations that work as intended under modular arithmetic, e.g. additions, subtractions and multiplications [(44)](https://www.nayuki.io/page/unsigned-int-considered-harmful-for-java).
+Not division and reminder.
+Also, for unsigned it is required that all variables have the same bit-width, since the usual arithmetic conversions don't do sign-extension for unsigned integers [(73)](https://news.ycombinator.com/item?id=2364065).
+The modular arithmetic ensures that the correct number of steps is taken in both directions regardless of any wrapping at either side.
+It may make debugging more difficult since printing values won't show the "semantically correct" value but instead the wrapped value.
+However, if we do divides on a supposedly negative, but actually very large, values then we will get an incorrect result.
+
 ```cpp
-void g(int);
-
-void f(int x, int y)
+void work(
+	Container& container,
+	size_t base,
+	size_t bonus,
+	size_t penalty,
+	size_t attenuation)
 {
-	g(x - y);
+	size_t index = base + (bonus - penaly) / attenuation;
+	// Work with container[index].
 }
 ```
 
-Without any checks the `x -  y` expression can both overflow (both `x` and `y` very large) and underflow (`x` very small, `y`  very large).
-It is very rare these cases are explicitly checked for in real-world code bases.
-
-Consider an unsigned variant:
-```cpp
-void g1(unsigned);
-void g2(unsigned);
-
-void f(unsigned x, unsigned y)
-{
-	if (x >= y)
-		g1(x - y);
-	else
-		g2(y - x);
-}
+However, since most subtraction is incorrect anyway [25](https://graphitemaster.github.io/aau/) , this doesn't matter.
+Instead of computing the signed delta, use the absolute value of the delta:
 ```
-
-Assuming `g1` and `g2` are well-defined for all unsigned inputs, so is `f`.
-The separation of `g` into `g1` and `g2` makes it clear that we have two different cases, something that may be important in the signed variant as well, but is so implicitly in the fact that the parameter to `g` may be positive or negative.
-Are we sure that `g(int)` will handle negative values correctly?
-We can be reasonable confident that `g2(unsigned)` handles the `x < y` case correctly since that is it whole reason for existing.
-
-If we do want to handle under- and overflow in the signed integer case we can make use of GCC's arithmetic functions with overflow checking [(65)](https://gcc.gnu.org/onlinedocs/gcc/Integer-Overflow-Builtins.html).
-```cpp
-extern void g1(int); 
-extern void g2(int); 
-extern void g3(int); 
-
-void f(int x, int y)
-{
-  int x_minus_y;
-  if(__builtin_ssubl_overflow(x, y, &x_minus_y))
-	 g1(x_minus_y);
-  else if(x > y)
-	 g2(/* What do we pass here? */); // Overflow.
-  else
-	 g3(/* What do we pass here? */); // Underflow.
-}
+integer_t delta = std::max(x, y) - std::min(x, y);
 ```
+It won't be the value you wanted, but at least it will be legal and under-/overflow free.
+(I understand Dale Weiler doesn't mean it like that, but the whole discussion is weird to me.)
 
-# Detecting Error States
+## Detecting Error States
 
 With signed integers we can test for negative vales where we only expect positive values.
 With unsigned it isn't as obvious, but we can set a maximum allowed value and flag any value above that limit as possibly incorrectly calculated.
@@ -1524,7 +1559,7 @@ With signed integers we can use sanitizers and `-ftrapv` to detect under- and ov
 There are sanitizers that do the same for unsigned integers as well, `-fsanitize=unsigned-integer-overflow` [(55)](https://clang.llvm.org/docs/UndefinedBehaviorSanitizer.html), but we may get false positives since there are valid cases for unsigned calculations that wrap.
 
 
-## Detecting Overflow
+### Detecting Overflow
 
 Unsigned integers have well-defined under- and overflow behavior: they wrap.
 This means that we can detect it after it has happened, assuming we still have access to the operands.
@@ -1664,7 +1699,7 @@ bool can_add(std::ptrdiff_t base, std::ptrdiff_t offset)
 Similar checks exists for subtraction and multiplication as well [(37)](https://wiki.sei.cmu.edu/confluence/display/c/INT30-C.+Ensure+that+unsigned+integer+operations+do+not+wrap).
 
 
-## Detecting Underflow
+### Detecting Underflow
 
 If an application occasionally miscalculates an index to be negative that might not be noticed if using signed integer for indexing other than difficult-to-diagnose bugs caused by reading valid memory but slightly off from the start of an array, assuming an assert didn't catch it.
 With unsigned integers for indexing the negative value becomes a very large value and likely a segmentation fault or near-infinite loop on the first use [(68)](https://github.com/ericniebler/stl2/issues/182).
@@ -1746,8 +1781,49 @@ unsigned short process_meshlets(
 }
 ```
 
+### Tool-Assisted Runtime Under- And Overflow Detection
 
-# Computing Distance Between Indices
+
+Tools, such as sanitizers and static analysis, can report underflow and underflow on signed arithmetic operations [(45)](https://stackoverflow.com/a/18796084), [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity).
+In most cases the user did not intend for the operation to under- or overflow,
+and even if if was intended it is undefined behavior and should not be relied upon.
+Build with `-fsanitizer=undefined` or `-ftrapv` to be instantly notified when that happens, assuming the compiler didn't optimize the code away on the assumption that singed under- or overflow never happens.
+Tools cannot (while strictly following the standard, but see below) do this for unsigned operations in general since the behavior is defined in those cases, it is not an error.
+
+There are tools that can be configured to report unsigned wrapping if we want to,
+such as `fsanitize=unsigned-integer-overflow`,
+but since there are cases where we actually want wrapping this is not something that can be done in general.
+Enabling it may produce false positives.
+We may want the check in some parts of the code but not others.
+
+The real world is not as neat as some language lawyers would like to believe.
+There is `-fwrapv`, (I had something more in mind to write here.).
+
+For a real-world example consider the famous case [(61)](https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/) of integer overflow plaguing many binary search implementations.
+While running a binary search we need to compute a mid-point between two indices.
+One way to do this is `mid = (low + high) / 2`.
+If we have a large range then the `low + high` part can overflow.
+It doesn't matter if we use signed or unsigned indices.
+The proposed fix is to use `mid = low + (high - low) / 2` instead.
+This fixes the problem by computing a relative offset, which small, instead of the big sum.
+Would the following also work? (I think so, it is basically the second solution in [_Extra, Extra - Read All About It: Nearly All Binary Searches and Mergesorts are Broken_ (61)](https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/)
+```cpp
+std::ptrdiff_t high = /* Something. */;
+std::ptrdiff_t low = /* Something. */;
+std::ptrdiff_t mid =
+	static_cast<std::ptrdiff_t>(
+		(
+			static_cast<std::size_t>(low)
+			+ static_cast<std::size_t>(high)
+		)
+		/ 2u);
+```
+The idea is that since unsigned has double the range of signed then it can safely hold the sum of two signed integers.
+Then we divide by 2 and bring the value back down into the range of the signed integer type.
+So we use the extra space available to unsigned integers as an overflow protection area for the intermediate result, and then return back to signed land.
+
+
+## Computing Distance Between Indices
 
 We cannot compute distances between values like we normally would when using unsigned integers.
 This looks like it would give us the distance between `start` and `end`, and in some theoretical sense it does, but it doesn't give the shortest distance and the `std::abs` will trigger a compiler error [(32)](https://stackoverflow.com/questions/47283449/should-signed-or-unsigned-integers-be-used-for-sizes).
@@ -1825,7 +1901,7 @@ void work(ptrdiff_t start, ptrdiff_t end)
 ```
 
 
-# Bit Width Conversions
+## Bit Width Conversions
 
 A bit width conversion is when an integer value with one bit width is converted to a different bit width.
 For example `int16_t` to `int64_t`, or `uint64_t` to `uint32_t`.
