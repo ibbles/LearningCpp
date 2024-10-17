@@ -1,5 +1,7 @@
 #include <cstddef>
 #include <cstdint>
+
+#include <array>
 #include <iostream>
 #include <limits>
 #include <vector>
@@ -434,6 +436,194 @@ void index_calc_with_divide()
     }
 }
 
+__attribute((noinline)) int mod(int b)
+{
+    return b % 16;
+}
+
+__attribute((noinline)) int mod(unsigned b)
+{
+    return b % 16;
+}
+
+__attribute((noinline))
+std::ptrdiff_t
+sum_range(std::ptrdiff_t n)
+{
+    std::ptrdiff_t sum{0};
+    for (std::ptrdiff_t i = 1; i <= n; ++i)
+    {
+        sum += i;
+    }
+    return sum;
+}
+
+__attribute((noinline))
+std::size_t
+sum_range(std::size_t n)
+{
+    std::size_t sum{0};
+    for (std::size_t i = 1; i <= n; ++i)
+    {
+        sum += i;
+    }
+    return sum;
+}
+
+__attribute((noinline)) unsigned sum_range(unsigned n)
+{
+    unsigned sum{0};
+    for (unsigned i = 1; i <= n; ++i)
+    {
+        sum += i;
+    }
+    return sum;
+}
+
+__attribute((noinline)) unsigned useless(int value)
+{
+    return value * 7 / 7;
+}
+
+__attribute((noinline)) unsigned useless(unsigned int value)
+{
+    return value * 7 / 7;
+}
+
+__attribute((noinline)) void multiply_small()
+{
+    uint16_t small = std::numeric_limits<uint16_t>::max();
+    consume(small * small);
+    consume(static_cast<uint32_t>(small) * small);
+}
+
+__attribute((noinline))
+int32_t
+add_trunc_32(int32_t lhs, int32_t rhs)
+{
+    return lhs + rhs;
+}
+
+__attribute((noinline))
+int16_t
+add_trunc_16(int16_t lhs, int16_t rhs)
+{
+    return lhs + rhs;
+}
+
+__attribute((noinilne)) void test_add_trunc()
+{
+    {
+        int64_t lhs{(1l << 33) + 5};
+        int64_t rhs{(1l << 33) + 10};
+        int64_t sum = lhs + rhs;
+        int64_t added = add_trunc_32(lhs, rhs);
+        std::cout << "\ntest_add_trunc\n";
+        std::cout << "sum:   " << sum << '\n';
+        std::cout << "added: " << added << '\n';
+    }
+
+    {
+        int32_t lhs{(1l << 17) + 5};
+        int32_t rhs{(1l << 17) + 10};
+        int32_t sum = lhs + rhs;
+        int32_t added = add_trunc_16(lhs, rhs);
+        std::cout << "\ntest_add_trunc\n";
+        std::cout << "sum:   " << sum << '\n';
+        std::cout << "added: " << added << '\n';
+    }
+}
+
+template <typename T, typename IndexType>
+__attribute((noinline)) bool max_size_check()
+{
+    size_t constexpr max_allowed_size = static_cast<size_t>(std::numeric_limits<IndexType>::max());
+    static_assert(std::vector<T>().max_size() <= max_allowed_size);
+    return std::vector<T>().max_size() <= max_allowed_size;
+}
+
+template <typename Container>
+bool continueReverseLoop(size_t index, Container const &container)
+{
+    return index < container.size();
+}
+
+template <typename Container>
+bool continueReverseLoop(ptrdiff_t index, Container const &container)
+{
+    return index > 0;
+}
+
+template <typename Container>
+__attribute((noinline)) void reverse_loop_template(Container &container)
+{
+    for (typename Container::size_type index = container.size() - 1;
+         continueReverseLoop(index, container);
+         --index)
+    {
+        consume(container[index]);
+    }
+}
+
+template <typename SizeType>
+struct Container
+{
+    using size_type = SizeType;
+
+    Container(SizeType size) : m_size(size)
+    {
+    }
+
+    SizeType size() const
+    {
+        return m_size;
+    }
+
+    int operator[](int index) const
+    {
+        return index;
+    }
+
+    SizeType m_size;
+};
+
+__attribute((noinline)) void reverse_loop_signed()
+{
+    Container<ptrdiff_t> container(100);
+    reverse_loop_template(container);
+}
+
+__attribute((noinline)) void reverse_loop_unsigned()
+{
+    Container<size_t> container(100);
+    reverse_loop_template(container);
+}
+
+__attribute((noinline)) void reverse_loop_vector()
+{
+    std::vector<int> container(100);
+    reverse_loop_template(container);
+}
+
+volatile uint64_t bit{1};
+
+__attribute((noinline))
+uint64_t
+get_bit()
+{
+    return bit;
+}
+
+__attribute((noinline))
+uint64_t
+mask_lsb(uint64_t value)
+{
+    uint32_t v1 = value;
+    uint32_t v2 = get_bit();
+    v2 &= v1;
+    return v2;
+}
+
 int main()
 {
     // std::cout << "Forwards:\n";
@@ -546,6 +736,29 @@ int main()
     subtract_negative_to_signed();
     index_calc_with_multiply();
     index_calc_with_divide();
+
+    std::cout << "Multiply small\n";
+    multiply_small();
+
+    std::cout << "\nMax size:\n";
+    std::cout << "ptrdiff_t max: " << std::numeric_limits<ptrdiff_t>::max() << '\n';
+    std::cout << "size_t max:    " << std::numeric_limits<size_t>::max() << '\n';
+    std::cout << "std::vector:   " << std::vector<char>().max_size() << '\n';
+
+    // Does not build:
+    //   error: array is too large (4611686018427387903 elements)
+    // std::cout << "std::array:    " << (new std::array<char, std::numeric_limits<ptrdiff_t>::max() / 2>())->max_size() << '\n';
+
+    test_add_trunc();
+
+    max_size_check<char, ptrdiff_t>();
+    max_size_check<char, int64_t>();
+
+    // Does not build:
+    // <source>:###:19: error: static assertion failed due to requirement 'std::vector<char, std::allocator<char>>().max_size() <= max_allowed_size'
+    // ### |     static_assert(std::vector<T>().max_size() <= max_allowed_size);
+    //     |                   ^~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~~
+    // max_size_check<char, int32_t>();
 
     return 0;
 }
