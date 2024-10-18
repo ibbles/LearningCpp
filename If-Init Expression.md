@@ -43,13 +43,6 @@ int sum(std::vector<int>& container, std::mutex& mutex)
 }
 ```
 
-If-init expressions makes if-statements very similar to for-loops.
-The only difference is that for-loops loop and have a third expression that is run after each loop iteration, and if-statements can have an else-block.
-```cpp
-if (init; cond) {}
-for (init; cond; update) {}
-```
-
 
 Variables declared in the if-init expression are in scope in all following blocks [(2)](https://youtu.be/fI2xiUqqH3Q?t=418).
 ```cpp
@@ -66,6 +59,18 @@ else
 	// x and y are accessible.
 }
 ```
+
+
+# Other Block Statements
+
+If-init expressions makes if-statements similar to for-loops.
+The only difference is that for-loops loop and have a third expression that is run after each loop iteration, and if-statements can have an else-block.
+```cpp
+if (init; cond) {}
+for (init; cond; update) {}
+```
+
+There is also [[Switch-Init Expression]].
 
 # References
 
