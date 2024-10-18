@@ -1,6 +1,7 @@
 Copy elision is when the compiler puts two variables in the same memory location after it notices that one is initialized by copy from the other right before the other is destroyed, which means that no actual copy needs to happen.
-Made mandatory in some circumstances with [[C++17]].
+Made mandatory in some circumstances with [[C++17]] [(1)](https://www.youtube.com/watch?v=QpFjOlzg1r4).
 Commonly used when a local variables is initialized from the return value of a function call where the called function returns another local variable of the same type.
+Similar to [[Move Elision]].
 
 ```cpp
 struct Data { /* Omitted: member variables. */ };
