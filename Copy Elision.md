@@ -1,6 +1,7 @@
 Copy elision is when the compiler puts two variables in the same memory location after it notices that one is initialized by copy from the other right before the other is destroyed, which means that no actual copy needs to happen.
-Made mandatory in some circumstances with [[C++17]] [(1)](https://www.youtube.com/watch?v=QpFjOlzg1r4).
+Made mandatory in some circumstances with [[C++17]] [(1)](https://www.youtube.com/watch?v=QpFjOlzg1r4), [(2)](https://youtu.be/fI2xiUqqH3Q?t=2520).
 Commonly used when a local variables is initialized from the return value of a function call where the called function returns another local variable of the same type.
+This case is called _return value optimization_ or RVO.
 Similar to [[Move Elision]].
 
 ```cpp
@@ -195,6 +196,21 @@ get_data():
         ret
 ```
 
+
+# Guaranteed Copy Elision - Returning Non-Copyable Values
+
+Guaranteed copy elision, introduced with C++17, makes it possible to return non-copyable, types from functions [(2)](https://youtu.be/fI2xiUqqH3Q?t=2520).
+Only works for non-named variables, i.e. _named return value optimization_ a.k.a. NRVO, is not guaranteed.
+
+```cpp
+auto grab_lock(std::mutex& mutex)
+{
+	return std::lock_guard(mutex);
+}
+```
+
 # References
 
 - 1: [_C++ Weekly - Ep 190 - The Important Parts of C++17 in 10 Minutes_ by Jason Turner @ youtube.com 2019](https://www.youtube.com/watch?v=QpFjOlzg1r4)
+- 2: [_CppCon 2017: Bryce Adelstein Lelbach “C++17 Features (part 1 of 2)”_ by Bryce Adelstein Lelbash, CppCon @ youtube.com 2017](https://youtu.be/fI2xiUqqH3Q)
+
