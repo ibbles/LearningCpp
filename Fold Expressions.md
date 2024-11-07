@@ -12,7 +12,6 @@ A unary fold expression given an empty [[Template Parameter Pack]] will result i
 - `||`, for which the return vale is false.
 - `,`, for which the return value is `void()`.
 
-
 A fold expression can be either left or right[(2)](https://youtu.be/fI2xiUqqH3Q?t=1172).
 A left fold expression evaluates the left-most operation first.
 A right fold expression evaluates right-most operation first.
@@ -396,4 +395,5 @@ I don't know what to do about this.
 - 2: [_CppCon 2017: Bryce Adelstein Lelbach “C++17 Features (part 1 of 2)”_ by Bryce Adelstein Lelbash, CppCon @ youtube.com 2017](https://youtu.be/fI2xiUqqH3Q)
 - 3: [_Logical operators_ @ cppreference.com 2024](https://en.cppreference.com/w/cpp/language/operator_logical)
 - 4: [_operator overloading_ @ cppreference.com 2024](https://en.cppreference.com/w/cpp/language/operators)
+- 5: [_Core C++ 2021 :: C++17 key features_ by Alex Dathskovsky, CoreCppIL @ youtube.com 2021](https://www.youtube.com/watch?v=3gGhP0C-xOY)
 
