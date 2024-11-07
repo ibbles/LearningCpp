@@ -173,7 +173,12 @@ int main()
 
 	for_each_arg(print, 1, 2, 3);
 
+	// This does not compile.
+	// note:   template argument deduction/substitution failed:
+	// note:   couldn’t deduce template parameter ‘Function’
+#if 0
 	for_each_arg(name_type, 1, 'a', 1.0);
-
+#endif
+	/*  */
 	std::cout << '\n';
 }
