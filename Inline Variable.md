@@ -29,3 +29,4 @@ With inline variables this is handled for us.
 
 - 1: [_CppCon 2017: Bryce Adelstein Lelbach “C++17 Features (part 1 of 2)”_ by Bryce Adelstein Lelbash, CppCon @ youtube.com 2017](https://youtu.be/fI2xiUqqH3Q)
 - 2: [_C++17 - The Best Features - Nicolai Josuttis ACCU 2018_ by Nicolai Josuttis, ACCU Conference @ youtube.com 2018](https://youtu.be/e2ZQyYr0Oi0)
+- 3: [_Core C++ 2021 :: C++17 key features_ by Alex Dathskovsky, CoreCppIL @ youtube.com 2021](https://www.youtube.com/watch?v=3gGhP0C-xOY)
