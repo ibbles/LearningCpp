@@ -15,8 +15,8 @@ void work(Widget widget)
 }
 ```
 
-Example where we do a find and only work with the returned iterator if it is valid [(2)](https://youtu.be/fI2xiUqqH3Q?t=339).
-```shell
+Example where we do a find and only work with the returned iterator if it is valid [(2)](https://youtu.be/fI2xiUqqH3Q?t=339), [(3)](https://youtu.be/3gGhP0C-xOY?t=243).
+```cpp
 template <typename Key, typename Value, typename Function>
 void findAndUpdate<std::map<Key, Value>& table, Key key, Function getNewValue)
 {
@@ -26,6 +26,9 @@ void findAndUpdate<std::map<Key, Value>& table, Key key, Function getNewValue)
 	}
 }
 ```
+
+An advantage of this compared to the old approach of having a local variable for the iterator is that with an if-init expression the iterator variable is only in scope within the if-statement.
+It is not accessible after the if-statement, which means that there is no risk of variable mix-up.
 
 Example where we hold a mutex for a limited scope [(2)](https://youtu.be/fI2xiUqqH3Q?t=457):
 ```cpp
@@ -44,7 +47,7 @@ int sum(std::vector<int>& container, std::mutex& mutex)
 ```
 
 
-Variables declared in the if-init expression are in scope in all following blocks [(2)](https://youtu.be/fI2xiUqqH3Q?t=418).
+Variables declared in the if-init expression are in scope in all else blocks as well blocks [(2)](https://youtu.be/fI2xiUqqH3Q?t=418).
 ```cpp
 if (auto x = /* expression */; /* expression */)
 {
@@ -60,6 +63,12 @@ else
 }
 ```
 
+If-init can be used together with [[Structured Bindings]] [(3)](https://youtu.be/3gGhP0C-xOY?t=353).
+```cpp
+if (auto [it, inserted] = my_table.emplace(key, value); inserted)
+{
+}
+```
 
 # Other Block Statements
 
@@ -76,4 +85,5 @@ There is also [[Switch-Init Expression]].
 
 - 1: [_C++ Weekly - Ep 190 - The Important Parts of C++17 in 10 Minutes_ by Jason Turner @ youtube.com 2019](https://www.youtube.com/watch?v=QpFjOlzg1r4)
 - 2: [_CppCon 2017: Bryce Adelstein Lelbach “C++17 Features (part 1 of 2)”_ by Bryce Adelstein Lelbash, CppCon @ youtube.com 2017](https://youtu.be/fI2xiUqqH3Q)
+- 3: [_Core C++ 2021 :: C++17 key features_ by Alex Dathskovsky, CoreCppIL @ youtube.com 2021](https://www.youtube.com/watch?v=3gGhP0C-xOY)
 
