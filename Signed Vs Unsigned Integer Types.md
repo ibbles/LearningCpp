@@ -1,28 +1,30 @@
 # Motivation
 
 C++ provides two families of integer types: signed and unsigned.
-This means that every time we need a variable or constant of integer type we also need to decide if it should be signed or unsigned.
-The purpose of this note is to discuss reasons for choosing one type or the other, to evaluate the advantages and disadvantages of using signed or unsigned integers.
-Neither option is obviously better than the other and both comes with their own set of problems [(34)](https://youtu.be/Fa8qcOd18Hc?t=3080), [(75)](https://youtu.be/82jVpEmAEV4?t=3675).
-Either variant can be used and all problematic code snippets presented here can be fixed regardless of the type used.
-We can always blame "bad code" on "bad programmers", but systematic decisions should be done with (TODO Text here describing local vs global decisions and repeated errors.)
+This means that every time we need a variable, constant, or literal of integer type we also need to decide if it should be signed or unsigned.
+The purpose of this note is to discuss reasons for choosing one variant or the other, to evaluate the advantages and disadvantages of using signed or unsigned integers.
+Neither option is obviously better than the other and both come with their own set of problems [(34)](https://youtu.be/Fa8qcOd18Hc?t=3080), [(75)](https://youtu.be/82jVpEmAEV4?t=3675).
+Either variant can be used and all problematic code snippets presented here can be fixed regardless of the variant used.
+We can always blame "bad code" on "bad programmers", but systematic decisions should be done with a greater context in mind.
+The goal is to reduce the numbers mistakes, bugs, vulnerabilities, system outages, and intrusions as much as possible and to do that we need to embrace recommendations that has the widest positive impact possible.
 
 The purpose for this note is to explore the pros and cons of using each in cases where it is not obvious which one we should use, such as for indices and sizes.
-There is no universally agreed upon choice.
+There is no universally agreed upon choice and domain specific considerations may cause one or the other to be favored.
+Use this note as a collection of things to consider when making a project-wide decision for a new project.
 
 The basis for the evaluation is that code should be clear and obvious.
 The straight-forward way to write something should not produce incorrect results or unexpected behavior.
-If what the code says, or at least implies after a quick glance, isn't what the code actually does then there is a deeper problem than just "bad code, bad programmer".
+If what the code says, or at least hints at after a quick glance, isn't what the code actually does then there is a deeper problem than just "bad code, bad programmer".
 We are not content with having the code being correct when we first check it in, we also want it to remain correct through multiple rounds of modification and extension by multiple people.
 Real-world programmers writing real-world programs tend to have other concerns in mind than the minutiae of implicit integer conversion rules and overflow semantics.
-What we want to do is reduce the number of ways things can go wrong, mitigate the bad effects when something does go wrong, and minimize the cognitive load to reduce bugs overall [(62)](https://news.ycombinator.com/item?id=29766658).
-We want to determine which choice leads to errors that are more common, have more dire consequences, and which are going to be harder to identify when they happen [(75)](https://youtu.be/82jVpEmAEV4?t=3675).
-We want tools; language and compiler included, that help us prevent errors [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
+What we want to do is reduce the number of ways things can go wrong, mitigate the bad effects when something does go wrong, and minimize the cognitive load white reading or writing code to reduce bugs overall [(62)](https://news.ycombinator.com/item?id=29766658).
+We want to determine which choice leads to errors that are more common, have more dire consequences, and which are going to be harder to identify when they happen [(75)](https://youtu.be/82jVpEmAEV4?t=3675), and then avoid that choice.
+We want tools; language and compiler included but also others, that help us prevent errors [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
 We want to help the compiler help us.
 If one choice makes it possible for the compiler to identify more of our mistakes then that is a point in favor of that choice.
 If one choice puts a larger responsibility on the programmer to eliminate edge cases then that is a point against the choice.
 The idea is the same as using `const` as much as possible [(73)](https://news.ycombinator.com/item?id=2364065).
-Programmers do plenty of dumb mistakes, it is better if those can be found quickly in the IDE rather than during testing or, even worse, by the users [(75)](https://youtu.be/82jVpEmAEV4?t=3830).
+Programmers do plenty of dumb mistakes, it is better if those can be found quickly in the editor rather than during testing or, even worse, by the users [(75)](https://youtu.be/82jVpEmAEV4?t=3830).
 
 We can have different priorities when deciding between using signed or unsigned integers, and put different importance on each priority from project to project.
 - Robustness: It should be difficult to write bugs and easy to identify them when they happen.
@@ -31,9 +33,12 @@ We can have different priorities when deciding between using signed or unsigned 
 - Memory usage: Always use the smallest type possible.
 - Avoid undefined behavior.
 - Undefined behavior on error: It is diagnosable with an undefined behavior sanitizer.
-	- Though being undefined behavior means the compiler may do unexpected transformations to our code, meaning that the overflow might not actually happen at runtime. Instead the application does something completely different.
+	- Though being undefined behavior means the compiler may do unexpected transformations to our code, meaning that the error might not actually happen at runtime and instead the application does something completely different.
 
-There is a fundamental difference in mindset between an application that should keep going and do its best despite detected errors, and an application where an incorrect result is fatal and it is much preferable to terminate early and in an obvious way [(80)](https://www.martinfowler.com/ieeeSoftware/failFast.pdf). Do we want to detect and handle errors as best as we can and let the application keep running, or should errors lead to obvious incorrect application behavior such as a crash, infinite loop, failed assert, or similar. An obvious error means we can fix our code, but may lead to brittle software and unsatisfied users.
+There is a fundamental difference in mindset between an application that should keep going and do its best despite detected errors, and an application where an incorrect result is fatal and it is much preferable to terminate early and in an obvious way [(80)](https://www.martinfowler.com/ieeeSoftware/failFast.pdf).
+Do we want to detect and handle errors as best as we can and let the application keep running, or should errors lead to obvious incorrect application behavior such as a crash, infinite loop, failed assert, or similar.
+An obvious error means we can fix our code, but may lead to brittle software and unsatisfied users.
+
 
 # Integer Basics
 
@@ -42,21 +47,25 @@ There is a fundamental difference in mindset between an application that should 
 Fixed sized integer types, which all primitive integer types are, have the drawback that they can only represent a limited range of values.
 When we try to use them outside of that range they wrap, trap, saturate, or trigger undefined behavior [(27)](https://blog.regehr.org/archives/1401).
 Typically, unsigned integers wrap while signed integer trigger undefined behavior.
-In most cases neither of these produce the result we intended and often lead to bugs and / or security vulnerabilities [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc), with the exception being algorithms that explicitly need wrapping behavior such as some encryption algorithms.
+In most cases neither of these produce the result we intended and often lead to bugs and / or security vulnerabilities [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
+A notable exception is algorithms that explicitly need wrapping behavior, such as some encryption and hashing algorithms.
+If you know that you need an unsigned integer with wrapping behavior then use an unsigned integer with wrapping behavior, this note does not apply.
 
-A signed integer type is one that can represent both positive and negative numbers, and zero.
+Where on the number line the representable values are placed varies between signed and unsigned integers, and between integer types with different bit widths.
+A signed integer type is one that can represent both positive and negative numbers, including zero.
 An unsigned integer is one that can only represent positive numbers, including zero.
-This means that a signed and an unsigned integer of the same have some, but not all, values in common.
+This means that a signed and an unsigned integer of the same bit width have some, but not all, values in common.
 For each integer size we can split the range into three segments.
 Example using `int` and `unsigned int`:
 - `INT_MIN` to -1: Only representable by `int`.
 - 0 to `INT_MAX`: Representable by both `int` and `unsigned int`.
 - `INT_MAX` + 1 to `UINT_MAX`: Only representable by `unsigned int`.
 
+
 ## Integer Sizes
 
-C++ provides the integer types `char`, `short`, `int`, `long`, and `long long`, and an unsigned variant of each.
-They all have an implementation defined sized and the unsigned variant is always the same size as the corresponding signed type.
+C++ provides the integer types `char`, `short`, `int`, `long`, and `long long`, with an unsigned variant of each.
+They all have an implementation defined sized and an unsigned type is always the same size as the corresponding signed type.
 `char` is a bit special in that there are three `char` types (`char`, `signed char`, and `unsigned char`) and they are all 1 byte in size.
 There are integer types with fixed size as well: `int8_t`, `int16_t`, `int32_t`, and `int64_`, and an unsigned variant for each.
 These are not separate types from the earlier integer types, but type aliases.
@@ -64,9 +73,9 @@ It is common that `int32_t` and `int` are the same type.
 
 Another pair of integer types is `size_t` and `ptrdiff_t`.
 These are integer types with an implementation defined size such that `size_t` can hold the size of any memory object, including arrays and heap allocated buffers, and `ptrdiff_t` is the result of pointer subtraction.
-It is common for `size_t` and `ptrdiff_t` to be the same size.
-In that case `size_t` can hold larger positive values than `ptrdiff_t` can.
-This means that there are memory objects so large, i.e. upper half of the range of `size_t` in size, that `ptrdiff_t` doesn't have enough range to represent the difference between two pointers pointing to the far ends of the object.
+It is common for `size_t` and `ptrdiff_t` to be the same size, but it is not required.
+In the case where `size_t` and `ptrdiff_t` have the same size, `size_t` can hold larger positive values than `ptrdiff_t` can.
+This means that there are memory objects so large, i.e. in the upper half of the range of `size_t` in size, that `ptrdiff_t` doesn't have enough range to represent the difference between two pointers pointing to bytes in the object far away from each other.
 That is a problem and trying compute such a difference is undefined behavior.
 ```cpp
 size_t const size = static_cast<size_t>(PTRDIFF_MAX) + 10;
@@ -93,23 +102,23 @@ A problem is that signed and unsigned expresses multiple properties and it is no
 ## Implicit Type Conversions
 
 Arithmetic operations are always performed with a single type [(49)](https://eel.is/c++draft/expr.arith.conv).
-If the operator is not a unary operator and the operands doesn't have the same type then one of them will be converted to the type of the other.
+If the operator is not a unary operator and the operands doesn't have the same type but are at least as large as `int` then one of them will be converted to the type of the other.
 This process is called the usual arithmetic conversions.
-The rules for this is non-trivial, but for this note we simplify it to the following rules:
-- The value with a smaller type is converted to the type of the larger.
+The way this is done is non-trivial, but for this note we simplify it to the following rules:
 - If they are the same size then the signed value is converted to the unsigned type.
+- Otherwise, the value with a smaller type is converted to the type of the larger.
 
-If you multiply an `int` and an `int64_t` then the computation will be performed using `int64_t`.
-If you multiply an `int` and an `unsigned int` then the computation will be performed using `unsigned int`.
+If you multiply an `int` and an `int64_t` then the computation will be performed using `int64_t` because `int64_t` is (typically) larger than `int`.
+If you multiply an `int` and an `unsigned int` then the computation will be performed using `unsigned int` because `int` and `unsigned int` are the same size.
 
-All operations are performed on at least the sizeof the `int` type, so if any value has a type smaller than that then it is converted to `int` before evaluating the operator.
+All operations are performed on at least the size of the `int` type, so if any value has a type smaller than that then it is converted to `int` before evaluating the operator.
 This is called integer promotion.
 
 Unexpected type conversions that changes the sign of a value is a common source of bugs.
 Many compilers can therefore emit warnings for this, typically enabled with `-Wsign-conversion`.
 See also _Dangers_ > _Mixing Signed And Unsigned Integer Types_.
 
-Implicit conversions can also happen when we assign a value of one type to a variable of another type, or pass it to a function parameter.
+Implicit conversions can also happen when we assign a value of one type to a variable of another type, or pass an argument to a function parameter.
 In this case we may be suffering from truncation.
 Truncation is when the value of a larger type is stored in a variables with a smaller size.
 The high bits that don't fit are simply removed.
@@ -120,9 +129,13 @@ The alternative to implicit type conversion is explicit type conversions, i.e. c
 If we chose to mix signed and unsigned integer types, see _Dangers_ >  _Mixing Signed And Unsigned Integer Types_, for example to use a signed loop counter when iterating over a container with an unsigned size type, then we may chose to either rely on implicit conversions or explicit casts.
 An alternative is to wrap the container types in a view that provides a signed interface.
 
+
 ## Illegal Operations
 
-Some operations are illegal.
+Some operations are illegal with integer types.
+It is the responsibility of the programmer to eliminate all possibility of illegal operations.
+I believe all of these trigger undefined behavior.
+
 - Division by zero.
 	- The integer types doesn't have a value representing infinity or NaN.
 - Shift by more than the bit width.
@@ -131,38 +144,45 @@ Some operations are illegal.
 	- (So why is only multiply and divide illegal? Why not also unary minus? Or is that also illegal?)
 - Multiplying two unsigned integers with size smaller than `int` with a result out of range for `int`.
 	- This is because integers smaller than `int` are promoted to `int` before use, which means that the operation is subjected to all the limitations of signed integer arithmetic, including overflow being undefined behavior. This is problematic with multiplication because, on a platform where `int` is 32-bit, there are `uint16_t` values that when multiplied produces a result larger than `std::numeric_limits<int>::max`, and thus overflow, and thus undefined behavior.
+	- So we cannot say "unsigned integers wrap on overflow" because that is not true for unsigned types smaller than `int` but large enough that a product between two values may overflow the range of `int`.
 
 
 # Standard Library
 
 Many containers in the standard library use `size_t`, which is an unsigned type, for indexing and counts.
-I assume that the standard library designers know what they are doing.
-It is a sign indicating that we should do the same, and that we should use unsigned integer when working with the standard library.
+We may chose to assume that the standard library designers knew what they were doing, and take this as a sign indicating that we should do the same, and that we should use unsigned integer when working with the standard library.
 Not everyone agrees [(9)](https://www.learncpp.com/cpp-tutorial/stdvector-and-the-unsigned-length-and-subscript-problem/)[(7)](https://google.github.io/styleguide/cppguide.html#Integer_Types), not even some of the standard library maintainers (`citation needed`) and committee members [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf).
 It may be that it was the correct decision at the time, but things changed (e.g. 16-bit to 32-bit to 64-bit CPUs.) and now we are stuck with what we have for legacy / consistency / backwards compatibility reasons.
 The design of any API that is difficult to change by definition happens before widespread usage of that API, and it is not until widespread usage we we discover real-world implications that wasn't though of beforehand.
 
-Since the standard library containers use `std::size_t`, it is not unreasonable that our code using then also should.
+Since the standard library containers use `std::size_t`, it is not unreasonable that our code using them also should.
 By making our own container classes similar to the standard library containers we make them familiar to other C++ programmers [(18)](https://softwareengineering.stackexchange.com/questions/338088/size-t-or-int-for-dimensions-index-etc).
 
-There is `std::ssize(const T& container)` that returns the size of the container as a signed integer.
+There is `ptrdiff_t std::ssize(const T& container)` that returns the size of the container as a signed integer.
+It is undefined behavior to call this on a container with a size larger than `PTRDIFF_MAX`.
+Such containers are uncommon.
 
-I don't know of any way to index with a signed index, other than passing in the signed index and letting it implicit convert to the unsigned equivalent or do the cast explicitly.
+I don't know of any way to index with a signed index, other than passing in the signed index and letting it implicitly convert to the unsigned equivalent or do the cast explicitly.
 I've seen the following recommendations:
 - Don't do direct indexing and instead use ranged base for loops,  iterators, named algorithms, ranges, ... (TODO More to add here?).
-- Pass the signed value to `operator[]`.
+- Pass the signed value to `operator[]` [(5)](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es107-dont-use-unsigned-for-subscripts-prefer-gslindex).
 	- This will work as long as the value is non-negative, so make sure you have a check for that or some other way to guarantee it.
+	- This works as long as the the index you are trying to access isn't too large.
 	- Disable the `sign-conversion` warning since every indexing will trigger it.
 - Provide a short-named conversion function.
 	- Such as `std::size_t toUZ(std::ptrdiff_t)`.
 	- Use as `container[toUZ(index)]`.
+	- This seems excessively tedious and noisy.
 - Use a view that provide signed size and element access.
 	- Possibly using `toUZ` and `fromUZ` internally.
+	- `std::span` was meant to do this, but that was sabotaged by the committee.
 
 `std::next` and `std::prev` uses a signed type.
+This means that they cannot be used to step to the end of a very large container.
 
 The standard containers will assert (Or throw, no sure which.) if an out-of-bounds index is passed to `operator[]` in debug builds.
 If you want bounds checking in release builds then use `at` instead of `operator[]`.
+Or see of your standard library implementation has a compiler flag to enable bounds checking in release builds.
 
 
 # Note Conventions
@@ -175,11 +195,11 @@ Some results are different on other machines.
 We assume that signed integers are represented by two's complement, something that has only recently been required by the language standard.
 
 In this note `integer_t` is an integer type that is an alias for either `size_t` or `ptrdiff_t` depending on if we use signed or unsigned indexing.
-It is used in code snippets where the surrounding text discusses the various ways the code fails with either type.
-The generic `integer_t` code snipped is often followed by a specific `size_t` and / or `ptrdiff_t` snippet with additional checks.
+It is used in code snippets where the surrounding text discusses the various ways in which the code fails with either type.
+The generic `integer_t` code snipped is often followed by a specific `size_t` and / or `ptrdiff_t` snippet with additional checks or other modifications.
 
-In this note `Container` represents any container type that has `integer_t size() const` and `T& operator[](integer_t)` member functions, for example `std::vector` for `integer_t = size_t` .
-In many chapters it is assumed that valid indices are in the range `[0, size() - 1]`, any exceptions are explicitly noted.
+In this note `Container` represents any container type that has `integer_t size() const` and `T& operator[](integer_t)` member functions, for example `std::vector` with `integer_t = size_t` .
+In most cases it is assumed that valid indices for a container are in the range `[0, container.size() - 1]`, any exceptions are explicitly noted.
 
 Many code snippets in this note represent actual work with a vaguely defined function named `work`.
 It often takes a `Contaner` parameter and possibly also an index to work on.
@@ -191,14 +211,14 @@ void work(Container& container)
 {
 	for (integer_t i = 0; i < container.size(); ++i)
 	{
-		// World with container[i].
+		// Work with container[i].
 	}
 }
 ```
 Many chapters start with a function with a narrow contract [(82)](https://quuxplusone.github.io/blog/2018/04/25/the-lakos-rule/), [(83)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2011/n3279.pdf) returning `void` and ends with one or more functions with a wide contract that returns `bool`.
 
-In this note "mathematical results" means the result of an arithmetic operation interpreting all values as being in ℤ, the infinite number line of integers in both directions.
-I know that the ℤ/n ring is also "mathematics" but I don't care, it is not what we usually mean when talking about counts, sizes, and offsets which are the subject for this note.
+In this note "mathematical results" means the result of an arithmetic operation interpreting all operands as values in ℤ, the infinite number line of integers in both directions.
+I know that the ℤ/n ring is also "mathematics" but I don't care, it is not what we usually mean when talking about counts, sizes, and offsets, which are the subject for this note.
 
 In this note "arithmetic underflow" refers to an arithmetic operation that should produce a result that is smaller than the smallest value representable by the expression's type.
 For a signed type that is some large negative value.
@@ -209,7 +229,7 @@ Similar to underflow, but at the high end of the integer type's range instead of
 
 These definitions are different from how these words are defined in the language specification since that text uses the ℤ/n definition for unsigned integers.
 
-Signed numbers are not allowed to underflow or overflow, that is [[Undefined Behavior]].
+Signed numbers are not allowed to underflow or overflow, that triggers [[Undefined Behavior]].
 Unsigned numbers are allowed to overflow and underflow, in which case they wrap around.
 This is called modular arithmetic, which is basically what ℤ/n means.
 From a language specification standpoint this isn't under- or overflow at all, it is just the way the unsigned types work.
@@ -221,14 +241,16 @@ This can in some cases produce more efficient code and in some cases introduce b
 # Dangers
 
 It would be nice if we could pick any type we felt like and have things just work.
+It would be nice if there were a single integer type that could hold all possible integer values.
 Unfortunately, that is not how the language, or computer hardware, has been designed.
 Things that lead to unexpected results include:
-- Implicit type conversions with unexpected results.
+- Implicit type conversions resulting in unexpected values.
 - Arithmetic operations causing under- or overflow resulting in undefined behavior.
 - Arithmetic operations causing unexpected or unintended wrapping.
 - Unexpected results when comparing signed and unsigned values.
 
-This chapter describes and exemplifies the language behavior, the effects of these dangers on code will be explored in the rest of this note.
+This chapter describes and exemplifies the language behavior.
+The effects of these dangers on code will be explored in the rest of this note.
 
 When we say that some arithmetic operation produced an unexpected result we don't only mean that it is unexpected that fixed-width integers wrap at the ends of the type's range,
 we may also mean that it was unexpected that this particular execution of that operation reached that end.
@@ -237,7 +259,7 @@ we may also mean that it was unexpected that this particular execution of that o
 ## Integer Promotions
 
 C++ does all integer arithmetic using types that are at least as wide as `int`.
-Called integer promotions [(50)](https://eel.is/c++draft/conv.prom).
+The conversions performed to achieve this is called integer promotions [(50)](https://eel.is/c++draft/conv.prom).
 If you try to add, or do any other arithmetic operation on, two variables whose types are smaller than `int`, such as two `int8_t`, then the values will first be promoted to `int` or `unsigned int` if `int` cannot hold all values of the source type  [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
 This makes expressions involving small types work as expected even when intermediate results are outside the range of the source type since intermediate results are allowed to go beyond the range of the original type without issue as long as they stay within the range of `int` or `unsinged int` [(51)](https://wiki.sei.cmu.edu/confluence/display/c/INT02-C.+Understand+integer+conversion+rules).
 ```cpp
@@ -250,7 +272,7 @@ In the above example `c1 * c2` is larger than `std::numberic_limits<int8_t>::max
 The division by `c3` brings the value down into the range of `int8_t` again and all is well.
 
 This conversion only happens up to the size of `int`.
-If you do the same operations where `c1`, `c2`, and `c3` are all `int` and the initial values chosen so that the `c1 * c2` multiplication overflows then your application is toast, as you have invoked undefined behavior.
+If you do the same operations where `c1`, `c2`, and `c3` are all `int` and the initial values chosen so that the `c1 * c2` multiplication overflows then your application is toast, as you have triggered undefined behavior.
 
 Integer promotion doesn't require two operands, it applies also to unary operators as well.
 Consider
@@ -267,6 +289,7 @@ uint8_t a = 1; // 0000'0001.
 I think I mean to write something about truncation here.
 Or widening `int32_t` → `uint32_t` → `uint64_t`.
 )
+
 
 ## Mixing Signed And Unsigned Integer Types
 
