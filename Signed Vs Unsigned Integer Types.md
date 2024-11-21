@@ -39,6 +39,18 @@ There is a fundamental difference in mindset between an application that should 
 Do we want to detect and handle errors as best as we can and let the application keep running, or should errors lead to obvious incorrect application behavior such as a crash, infinite loop, failed assert, or similar.
 An obvious error means we can fix our code, but may lead to brittle software and unsatisfied users.
 
+Some data is inherently signed.
+Sometimes we need to use such data to compute indices or sizes (citation needed).
+By making the container interface unsigned we force unsigned values upon the user,
+we make the decision for them.
+
+Is this more of a problem than the opposite? Forcing signed values upon the user?
+It is if the range of the signed type can be assumed to be large enough.
+All not-too-large unsigned values can be represented in a signed value.
+The conversion is safe.
+The same is not true for signed to unsigned.
+There are many reasonable sized negative values that cannot be represented by an unsigned type.
+
 
 # Integer Basics
 
@@ -102,6 +114,7 @@ A problem is that signed and unsigned expresses multiple properties and it is no
 ## Implicit Type Conversions
 
 Arithmetic operations are always performed with a single type [(49)](https://eel.is/c++draft/expr.arith.conv).
+There are operations that are not arithmetic, such as bit shifts and Boolean logic.
 If the operator is not a unary operator and the operands doesn't have the same type but are at least as large as `int` then one of them will be converted to the type of the other.
 This process is called the usual arithmetic conversions.
 The way this is done is non-trivial, but for this note we simplify it to the following rules:
@@ -111,7 +124,7 @@ The way this is done is non-trivial, but for this note we simplify it to the fol
 If you multiply an `int` and an `int64_t` then the computation will be performed using `int64_t` because `int64_t` is (typically) larger than `int`.
 If you multiply an `int` and an `unsigned int` then the computation will be performed using `unsigned int` because `int` and `unsigned int` are the same size.
 
-All operations are performed on at least the size of the `int` type, so if any value has a type smaller than that then it is converted to `int` before evaluating the operator.
+All arithmetic operations are performed on at least the size of the `int` type, so if any value has a type smaller than that then it is converted to `int` before evaluating the operator.
 This is called integer promotion.
 
 Unexpected type conversions that changes the sign of a value is a common source of bugs.
@@ -129,6 +142,25 @@ The alternative to implicit type conversion is explicit type conversions, i.e. c
 If we chose to mix signed and unsigned integer types, see _Dangers_ >  _Mixing Signed And Unsigned Integer Types_, for example to use a signed loop counter when iterating over a container with an unsigned size type, then we may chose to either rely on implicit conversions or explicit casts.
 An alternative is to wrap the container types in a view that provides a signed interface.
 
+For non-arithmetic operations, such as bit shifts and Boolean operators, the operands are not converted to the same type.
+In the following example [(87)](https://youtu.be/Iz2UOgLMj58?t=1723) the left hand side operand of `<<` is an `int` and the right hand side is `uint64_t`.
+The code tries to guard against too large shifts, since it is not allowed to shift more than the number of bits in the shifted value, by making sure the shift amount is never larger than 63.
+```cpp
+uint64_t work(uint64_t count)
+{
+	return 1 << (count % 64);
+}
+```
+We may think that the `int` is converted to `uint64_t`, the larger unsigned type, before the shift happens, but that is not the case.
+If `count` is in the range \[32, 63\] then we will shift the 32-bit `1` by more than its bit width and we get undefined behavior.
+
+The operators that does not trigger the usual arithmetic conversions are:
+- Bit shifts `<<` and `>>`.
+- Assignment operators `=`, `+=`, `-=`, etc.
+- The conditional operator `?:`.
+- Boolean operators `&&`, `||`.
+- Unary operators.
+	- Since there is only one operand there cannot be a larger and a smaller type.
 
 ## Illegal Operations
 
@@ -271,6 +303,60 @@ int8_t result = c1 * c2 / c3;
 In the above example `c1 * c2` is larger than `std::numberic_limits<int8_t>::max()`, but that's OK since it is smaller that `std::numeric_limits<int>::max()`, and the actual computation is done with `int`.
 The division by `c3` brings the value down into the range of `int8_t` again and all is well.
 
+It can be unexpected for people who think they know how limited range unsigned integers and wrapping works.
+Consider the following example that adds two unsigned 8-bit integers [(87)](https://youtu.be/Iz2UOgLMj58?t=1148).
+```cpp
+auto add_uint8(uint8_t lhs, uint8_t rhs)
+{
+	return lhs + rhs;
+}
+
+void work()
+{
+	auto sum = add_uint8(255u, 1u);
+}
+```
+We may think that `add_uint8` should return `int` and that `255u + 1u` should wrap back to 0 since 255 is the largest possible unsigned 8-bit number.
+This is not what happens, since addition is always done with at least `int`.
+So the program actually looks like this:
+```cpp
+int add_uint8(uint8_t lhs, uint8_t rhs)
+{
+	return static_cast<int>(lhs) + static_cast<int>(rhs);
+}
+
+void work()
+{
+	int sum = add_uint8(255u, 1u);
+	// Sum is 256.
+}
+```
+
+Integer promotion happens even when the compiler knows that the receiver of the evaluated expression is the of the same type as the operands to the operator.
+Consider the following variant of the `add_uint8` function where we have change the return type from `auto` to `uint8_t`.
+```cpp
+uint8_t add_uint8(uint8_t lhs, uint8_t rhs)
+{
+	return lhs + rhs;
+}
+```
+This is compiled as
+```cpp
+uint8_t add_uint8(uint8_t lhs, uint8_t rhs)
+{
+	return static_cast<uint8_t>(static_cast<int>(lhs) + static_cast<int>(rhs));
+}
+```
+Some compilers may warn that the implicit conversion from `int` to `uint8_t` may change the value.
+That is insane.
+That is, the following code is not type correct, for some strong definition of "correct". It is well defined, so it is not wrong.
+```cpp
+uint8_t add_uint8(uint8_t lhs, uint8_t rhs)
+{
+	return lhs + rhs;
+}
+```
+
 This conversion only happens up to the size of `int`.
 If you do the same operations where `c1`, `c2`, and `c3` are all `int` and the initial values chosen so that the `c1 * c2` multiplication overflows then your application is toast, as you have triggered undefined behavior.
 
@@ -293,63 +379,61 @@ Or widening `int32_t` → `uint32_t` → `uint64_t`.
 
 ## Mixing Signed And Unsigned Integer Types
 
-Some data is inherently signed.
-Sometimes we need to use such data to compute indices or sizes (citation needed).
-By making the container interface unsigned we force unsigned values upon the user,
-we make the decision for them.
-
-Is this more of a problem than the opposite? Forcing signed values upon the user?
-It is if the range of the signed type can be assumed to be large enough.
-All not-too-large unsigned values can be represented in a signed value.
-The conversion is safe.
-The same is not true for signed to unsigned.
-There are many reasonable sized negative values that cannot be represented by an unsigned type.
-
-C++ has counter intuitive and mathematically incorrect implicit conversion rules [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch).
-The compiler will implicitly convert signed values to unsigned when a signed and an unsigned operand of the same size are passed to an operator without checking that the signed value is even representable in the unsigned type [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
-Called the usual arithmetic conversions [(48)](https://en.cppreference.com/w/cpp/language/usual_arithmetic_conversions),  [(49)](https://eel.is/c++draft/expr.arith.conv).
-This is unfortunate, a compiler error would be better [(68)](https://github.com/ericniebler/stl2/issues/182).
-
-Since there are a number of bugs stemming from unintended conversions between signed and unsigned integer types [(10)](https://www.learncpp.com/cpp-tutorial/stdvector-and-the-unsigned-length-and-subscript-problem/) many compilers include warnings for this, often enabled with one or more of
-- `-Wconversion`
-- `-Wsign-conversion`
-- `-Wsign-compare`
-
+C++ has counter-intuitive and mathematically incorrect implicit conversion rules [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch).
 Arithmetic operations are always performed on two values of equal type [(49)](https://eel.is/c++draft/expr.arith.conv).
-If two different types are passed to an operator then they are converted to a common type.
-This process is called the usual arithmetic conversions.
-There are many steps involved in deciding which type to use, but for our discussion it can be summarized as:
-- The widest type wins.
-- If they are the same width, then unsigned wins.
+If two values with the same size but different signed-ness are passed to an operand then the compiler will implicitly convert the signed value to unsigned [(49)](https://eel.is/c++draft/expr.arith.conv).
+No check is made to ensure that the signed value is representable in the unsigned type [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
+This is unfortunate, a compiler error would have been better [(68)](https://github.com/ericniebler/stl2/issues/182).
+These conversions are called the usual arithmetic conversions [(48)](https://en.cppreference.com/w/cpp/language/usual_arithmetic_conversions).
 
 If you multiply an `int` and an `int64_t` then the computation will be performed using `int64_t`.
 If you multiply an `int` and an `unsigned int` then the computation will be performed using `unsigned int`.
 This can wreck havoc with your application since the usual arithmetic conversions happens not only for addition and multiplication and such, but also for comparison operators.
 That is, -1 is greater than 1 if 1 is unsigned [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/), [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch).
+This is surprising for many.
 ```cpp
-int small = -1
-unsigned int large = 1;
+int small {-1};
+unsigned int large {1};
 if (small < large)
 {
 	// This will never execute even though in the real world
-	// -1 absolutely is smaller than 1.
+	// -1 is smaller than 1, because -1 is actually 4294967295
+	// in this context.
+}
+```
+
+Expressed another way, in the following `compare_small_and_large` will return `true`.
+```cpp
+bool compare_small_and_large()
+{
+    int small {-1};
+    unsigned int large {4294967295};
+    return small == large;
 }
 ```
 
 Another example [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned):
 ```cpp
-int revenue = -5;            // Can be negative when loss, so signed.
-unsigned int taxRefund = 3;  // Cannot be negative, so unsigned.
-cout << "total earnings: " << revenue + taxRefund << endl;
+int revenue {-5};            // Can be negative, i.e. a loss, so signed.
+unsigned int taxRefund {3};  // Cannot be negative, so unsigned.
+std::cout << "total earnings: " << revenue + taxRefund << std::endl;
 ```
 Output:
 ```
 total earnings: 4294967294
 ```
 We get a very large value because in the addition we mix signed and unsigned.
-The signed value is converted to unsigned and since it is negative we get a very large value.
-In particular, we get a value that is 4 lower than `std::numeric_limits<unsigned int>::max()`.
+The signed `revenue` is converted to unsigned and since it is negative we get a very large value.
+It is converted to a value that is 4 lower than `std::numeric_limits<unsigned int>::max()`.
+4 lower because -1 is converted to the largest possible value and -5 is four smaller than -1.
 Then 3 (`taxRefund`) is added and we end up 1 (4 - 3) away from the max.
+To get the correct result we need to explicitly convert all unsigned value to signed every time they are used in an expression that also includes signed values.
+The following prints `-2`, as expected.
+```cpp
+int revenue {-5};            // Can be negative, i.e. a loss, so signed.
+unsigned int taxRefund {3};  // Cannot be negative, so unsigned.
+std::cout << "total earnings: " << revenue + static_cast<int>(taxRefund) << std::endl;
+```
 
 An example of an unintended underflow with wrapping and an implicit type conversion with unexpected result is the following [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
 ```cpp
@@ -716,6 +800,12 @@ k < i; // True.
 When the index comes from a non-trivial arithmetic expression - each type conversion incurs additional cost, be it in the form of additional runtime checks, reduced code clarity or a risk of semantic mistakes. So, for this scenario, there is an objective preference: we want to use the same type for indexes as is used for the majority of arithmetic expressions that generate them [(21)](https://internals.rust-lang.org/t/subscripts-and-sizes-should-be-signed/17699).
 
 Signed and unsigned integer types have different ranges so every time we convert between them we risk accidental overflow [(62)](https://news.ycombinator.com/item?id=29766658).
+
+Since there are a number of bugs stemming from unintended conversions between signed and unsigned integer types [(10)](https://www.learncpp.com/cpp-tutorial/stdvector-and-the-unsigned-length-and-subscript-problem/) many compilers include warnings for this, often enabled with one or more of
+- `-Wconversion`
+- `-Wsign-conversion`
+- `-Wsign-compare`
+
 
 Martin Beeger summarizes the mixing issue well  [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post15)
 
@@ -3921,6 +4011,27 @@ retq
 ```
 The compiler can't do much even when all values are signed because division by a power-of-two isn't just a shift in this case, depending on whether the dividend is positive or negative we may need to adjust the result of the shift in order to get correct rounding towards zero instead of rounding towards negative infinity, which is what a simple shift would result in [(86)](https://stackoverflow.com/questions/39691817/divide-a-signed-integer-by-a-power-of-2).
 
+An even more complicated example [(87)](https://youtu.be/Iz2UOgLMj58?t=1803) that sums the integers from 1 to some given upper limit.
+```cpp
+integer_t arithmetic_sum(integer_t n)
+{
+	integer_t sum = 0;
+	for (integer_t i = 1; i <= n; i++)
+	{
+		sum += i;
+	}
+	return sum;
+}
+```
+
+This has a closed form solution: `n * (n + 1) / 2`.
+Or rather, it would have if `integer_t` had infinite range.
+In our limited space world the closed form solution is only valid as long as `sum` doesn't overflow.
+Since signed integer overflow is undefined behavior the compiler is allowed to assume that won't happen and can replace the loop with just a few register manipulation instructions.
+With unsigned integers the compiler cannot make this assumption and must handle the wrapping case.
+Thus the closed form solution cannot be used and the compiler must emit instructions for the loop.
+That means that for any non-tiny `n` the signed integer version will be much faster.
+
 
 ## Type Replacement
 
@@ -4017,6 +4128,10 @@ What can a programmer do today to avoid as many pitfalls as possible?
 Don't use unsigned when you need:
 - mathematical operations [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
 - compare magnitudes [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU).
+
+A quote from Bjarne Stroustrup [(15)](https://youtu.be/Puio5dly9N8?t=2644):
+
+> There are far too many integer types, there are far too lenient rules for mixing them together, and it's a major bug source, which is why I'm saying stay as simple as you can, use (signed) integers till you really need something else.
 
 To make it clear when a conversion is happening, always use `static_cast` instead of relying on implicit conversions.
 
@@ -4263,4 +4378,5 @@ Not sure that this is a good idea.
 - 84: [_A Guide to Undefined Behavior in C and C++_ by John Regehr @ regehr.org 2010](https://blog.regehr.org/archives/213)
 - 85: [_P2809R2 Trivial infinite loops are not Undefined Behavior_ by JF Bastien @ open-std.org 2023](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p2809r2.html)
 - 86: [_Divide a signed integer by a power of 2_ by Gustavo Blehart, aka.nice @ stackoverflow.com 2016](https://stackoverflow.com/questions/39691817/divide-a-signed-integer-by-a-power-of-2)
+- 87: [_Alex Dathskovsky :: To Int or to Uint, This is the Question_ by Alex Dathskovsky, CoreCppIL @  youtube.com 2023](https://www.youtube.com/watch?v=Iz2UOgLMj58)
 
