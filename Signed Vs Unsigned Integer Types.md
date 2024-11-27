@@ -241,7 +241,7 @@ A simple example of a `work` function:
 ```cpp
 void work(Container& container)
 {
-	for (integer_t i = 0; i < container.size(); ++i)
+	for (integer_t i {0}; i < container.size(); ++i)
 	{
 		// Work with container[i].
 	}
@@ -295,15 +295,15 @@ The conversions performed to achieve this is called integer promotions [(50)](ht
 If you try to add, or do any other arithmetic operation on, two variables whose types are smaller than `int`, such as two `int8_t`, then the values will first be promoted to `int` or `unsigned int` if `int` cannot hold all values of the source type  [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/).
 This makes expressions involving small types work as expected even when intermediate results are outside the range of the source type since intermediate results are allowed to go beyond the range of the original type without issue as long as they stay within the range of `int` or `unsinged int` [(51)](https://wiki.sei.cmu.edu/confluence/display/c/INT02-C.+Understand+integer+conversion+rules).
 ```cpp
-int8_t c1 = 100;
-int8_t c2 = 3;
-int8_t c3 = 4;
+int8_t c1 {100};
+int8_t c2 {3};
+int8_t c3 {4};
 int8_t result = c1 * c2 / c3;
 ```
-In the above example `c1 * c2` is larger than `std::numberic_limits<int8_t>::max()`, but that's OK since it is smaller that `std::numeric_limits<int>::max()`, and the actual computation is done with `int`.
+In the above example `c1 * c2` is larger than `std::numberic_limits<int8_t>::max()`, but that's OK since it is smaller than `std::numeric_limits<int>::max()`, and the actual computation is done with `int`.
 The division by `c3` brings the value down into the range of `int8_t` again and all is well.
 
-It can be unexpected for people who think they know how limited range unsigned integers and wrapping works.
+This can be unexpected for people who think they know how limited range unsigned integers and wrapping works.
 Consider the following example that adds two unsigned 8-bit integers [(87)](https://youtu.be/Iz2UOgLMj58?t=1148).
 ```cpp
 auto add_uint8(uint8_t lhs, uint8_t rhs)
@@ -316,7 +316,7 @@ void work()
 	auto sum = add_uint8(255u, 1u);
 }
 ```
-We may think that `add_uint8` should return `int` and that `255u + 1u` should wrap back to 0 since 255 is the largest possible unsigned 8-bit number.
+We may think that `add_uint8` should return `uint8_t` and that `255u + 1u` should wrap back to 0 since 255 is the largest possible unsigned 8-bit number.
 This is not what happens, since addition is always done with at least `int`.
 So the program actually looks like this:
 ```cpp
@@ -332,7 +332,7 @@ void work()
 }
 ```
 
-Integer promotion happens even when the compiler knows that the receiver of the evaluated expression is the of the same type as the operands to the operator.
+Integer promotion happens even when the compiler knows that the receiver of the evaluated expression is of the same type as the operands to the operator.
 Consider the following variant of the `add_uint8` function where we have change the return type from `auto` to `uint8_t`.
 ```cpp
 uint8_t add_uint8(uint8_t lhs, uint8_t rhs)
@@ -348,8 +348,8 @@ uint8_t add_uint8(uint8_t lhs, uint8_t rhs)
 }
 ```
 Some compilers may warn that the implicit conversion from `int` to `uint8_t` may change the value.
-That is insane.
-That is, the following code is not type correct, for some strong definition of "correct". It is well defined, so it is not wrong.
+That is, the following code is not type correct, for some strong definition of "correct", since implicit conversions happen.
+It is well defined, so it is not wrong.
 ```cpp
 uint8_t add_uint8(uint8_t lhs, uint8_t rhs)
 {
@@ -363,7 +363,7 @@ If you do the same operations where `c1`, `c2`, and `c3` are all `int` and the i
 Integer promotion doesn't require two operands, it applies also to unary operators as well.
 Consider
 ```cpp
-uint8_t a = 1; // 0000'0001.
+uint8_t a {1}; // 0000'0001.
 ~a; // We might think this is 1111'1110.
     // But it is actually 1111'1111'1111'1111'1111'1111'1111'1110.
 ```
@@ -381,16 +381,34 @@ Or widening `int32_t` → `uint32_t` → `uint64_t`.
 
 C++ has counter-intuitive and mathematically incorrect implicit conversion rules [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch).
 Arithmetic operations are always performed on two values of equal type [(49)](https://eel.is/c++draft/expr.arith.conv).
+One source of bugs is when signed and unsigned values are mixed in an expression [(7)](https://google.github.io/styleguide/cppguide.html#Integer_Types), [(12)](https://www.sandordargo.com/blog/2023/10/11/cpp20-intcmp-utilities), [(15)](https://youtu.be/Puio5dly9N8?t=2561), [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU), [(41)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf). [(45)](https://stackoverflow.com/a/18796546), [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity).
+This leads to implicit conversions and results that are difficult to predict for many programmers.
 If two values with the same size but different signed-ness are passed to an operand then the compiler will implicitly convert the signed value to unsigned [(49)](https://eel.is/c++draft/expr.arith.conv).
+The problem is that C++ doesn't use the values two variables have when an operator is given variables of different types.
+Instead integer promotion [(50)](https://eel.is/c++draft/conv.prom) and the usual arithmetic conversions happen [(49)](https://eel.is/c++draft/expr.arith.conv).
 No check is made to ensure that the signed value is representable in the unsigned type [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
 This is unfortunate, a compiler error would have been better [(68)](https://github.com/ericniebler/stl2/issues/182).
 These conversions are called the usual arithmetic conversions [(48)](https://en.cppreference.com/w/cpp/language/usual_arithmetic_conversions).
 
-If you multiply an `int` and an `int64_t` then the computation will be performed using `int64_t`.
-If you multiply an `int` and an `unsigned int` then the computation will be performed using `unsigned int`.
+One reason for why mixing signed and unsigned integers in C++ is risky is because of unfortunate implicit conversion rules [(46)](https://stackoverflow.com/a/18248537).
+Consider
+- `unsigned - unsigned` which produces an unsigned result, and
+- `signed + unsigned` which also produces an unsigned result (except if the signed integer type has higher range than the unsigned type).
+
+If we take "unsigned" to mean "cannot be negative", i.e. "is positive", we can write
+`positive - positive is positive` and `signed + unsigned is unsigned`.
+Both of these are logically false.
+Subtracting two positive values can produce a negative value,
+and adding a positive value to a negative value may result in another negative value.
+
+If you multiply an `int` and an `int64_t` then the computation will be performed using `int64_t` because `int64_t` is wider and wider wins.
+If you multiply an `int` and an `unsigned int` then the computation will be performed using `unsigned int` because they are the same size and unsigned wins.
 This can wreck havoc with your application since the usual arithmetic conversions happens not only for addition and multiplication and such, but also for comparison operators.
-That is, -1 is greater than 1 if 1 is unsigned [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/), [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch).
-This is surprising for many.
+
+### Surprisingly, -1 > 1
+
+That is, -1 is greater than 1 if 1 is unsigned [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU), [(47)](https://blog.libtorrent.org/2016/05/unsigned-integers/), [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch).
+This is surprising to many, and arguably bad language design.
 ```cpp
 int small {-1};
 unsigned int large {1};
@@ -402,6 +420,12 @@ if (small < large)
 }
 ```
 
+So why is -1 not less than 1?
+What happens, in this case, is that the signed variable, which has a low value, is converted to the type of the unsigned variable [(49)](https://eel.is/c++draft/expr.arith.conv).
+Since the signed variable has a value not representable in unsigned type we get "garbage".
+Not actual garbage, the value we get is well defined, but in many cases it is indistinguishable for garbage since we got a completely different value.
+The value we get is a very large one because the negative signed value had the sign bit set and that bit represents some large value in an unsigned type.
+
 Expressed another way, in the following `compare_small_and_large` will return `true`.
 ```cpp
 bool compare_small_and_large()
@@ -412,7 +436,9 @@ bool compare_small_and_large()
 }
 ```
 
-Another example [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned):
+### Unsigned Values Can Taint Signed Expressions
+
+An example [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned) where a single unsigned value taints an otherwise signed expression, causing an incorrect result:
 ```cpp
 int revenue {-5};            // Can be negative, i.e. a loss, so signed.
 unsigned int taxRefund {3};  // Cannot be negative, so unsigned.
@@ -422,10 +448,11 @@ Output:
 ```
 total earnings: 4294967294
 ```
+
 We get a very large value because in the addition we mix signed and unsigned.
 The signed `revenue` is converted to unsigned and since it is negative we get a very large value.
-It is converted to a value that is 4 lower than `std::numeric_limits<unsigned int>::max()`.
-4 lower because -1 is converted to the largest possible value and -5 is four smaller than -1.
+It is converted to a value that is 1 lower than `std::numeric_limits<unsigned int>::max()`.
+1 lower because -1 is converted to the largest possible value and -5 is four smaller than -1.
 Then 3 (`taxRefund`) is added and we end up 1 (4 - 3) away from the max.
 To get the correct result we need to explicitly convert all unsigned value to signed every time they are used in an expression that also includes signed values.
 The following prints `-2`, as expected.
@@ -435,18 +462,103 @@ unsigned int taxRefund {3};  // Cannot be negative, so unsigned.
 std::cout << "total earnings: " << revenue + static_cast<int>(taxRefund) << std::endl;
 ```
 
+Remember this rule: Explicitly convert all unsigned integers to signed when used in an expression with possibly negative values.
+
+### No Sign Extension On Unsigned To Signed Widening
+
 An example of an unintended underflow with wrapping and an implicit type conversion with unexpected result is the following [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
+Here the programmer expected a very large unsigned value, i.e. `uint32_t(-1)`, to become an actual -1 when converted to a signed type.
 ```cpp
 uint32_t a {10};
 uint32_t b {11};
 int64_t c = a - b;
 ```
-Here we intended to get the result -1, since we have use the signed `int64_t` type.
-However, we get the value `std::numeric_limits<uint32_t>::max()` instead.
+We may expect `c` to have the value -1 since we have used the signed `int64_t` type.
+However, we get the value `std::numeric_limits<uint32_t>::max()` instead, i.e. only half of the bits in `c` is set.
 The problem is that `(a, b)` and `c` has different sizes.
 `a - b` is computed to be a very large 32-bit value that is then widened to the 64-bit type.
-Since `a - b` is an unsigned type no sign bit extension will be performed.
-Had all values been the same size the `c` would have the value -1, as we wanted.
+Since `a - b` is an unsigned type no sign bit extension will be performed, all the upper bits will be set to 0.
+As a last step the 64-bit unsigned value is converted to a signed 64-bit value, which is a no-op at the bit-level.
+Had all values been the same size then `c` would have the value -1, as we wanted, since the highest bit would have been set in the unsigned value and that bit would become the sign bit in the signed value, signaling a negative value.
+
+### Changing The Size Of A Variable Can Change The Sign Of An Expression
+
+Since the sizes of the types matter, changing the size of a variable can have a big influence on code using that variable.
+Let's look at two code snippets that use the same values but despite that produce different results [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity).
+The code snippets computes an index using a base index and an offset and then checks the computed index against a container size.
+
+The first expression:
+```cpp
+int base = 12;
+unsigned short offset = 25;
+int size = 32;
+if (base - offset < size)
+{
+	// This is true since 12 - 25 = -13, which is less than 32.
+}
+```
+The above behaves as one would expect since the promotion rules change the small unsigned `offset` to a signed `int` in the computation.
+
+But change a single type to a wider one and the semantics changes completely.
+In the code snippet below, where `offset` is `int`-sized instead of `short`-sized, we get an usual arithmetic conversion [(48)](https://en.cppreference.com/w/cpp/language/usual_arithmetic_conversions) [(49)](https://eel.is/c++draft/expr.arith.conv) instead of integer promotion:
+```cpp
+int base = 12;
+unsigned int offset = 25;
+int size = 32;
+if (base - offset < size)
+{
+	// This is false since 12 - 25 = 4294967283, which greater than 32.
+}
+```
+
+
+The same happens if we make `size` unsigned instead:
+```cpp
+int base = 12;
+int offset = 25;
+unsigned int size = 32;
+if (base - offset < size)
+{
+	// This is false since 12 - 25 = 4294967283, which is greater than 32.
+}
+```
+This variant is particularly insidious if the `size` value is a function call since in that case ALL values we declare are signed and a signed left hand side is computed for the comparison, but then the value is implicitly converted to unsigned and destroyed in the process.
+```cpp
+int base = 12;
+int offset = 25;
+if (base - offset < container.size())
+{
+	// This is often false since, surprisingly,
+	// 12 - 25 = 4294967283
+	// (Even though all our variables are signed.)
+	// which is greater than most container sizes.
+}
+```
+To avoid this problem use `std::ssize`, which returns a singed integer, instead of `Container::size`.
+
+Make another type change and we get the expected result again:
+```cpp
+int64_t base = 12;
+int offset = 25;
+unsigned int size = 32;
+if (base - offset < size)
+{
+	// This is true since 12 - 25 = -13, which is less than 32.
+}
+```
+In this case it is the unsigned right hand side, `size`, that is converted to the type of the left hand side, `base - offset`, since the left hand side has a larger bit width.
+Alas, if we use `container.size()` instead of `unsigned int size` for the right hand side then we have two 64-bit values and in that case the unsigned value wins and we compare the size against a very large positive value again.
+
+What I'm trying to communicate here is that it is not obvious what will happen when we compare two values, especially if we don't know what types are involved or if the types may be changed.
+A real-world example may be a line like the following [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity):
+```cpp
+if (source_index - findTargetIndex() < getSize())
+```
+It is not obvious what the types are here, or what implicit conversions will happen.
+
+This type of implicit conversion become even more difficult to keep track of when using typedef'd integer types and the application support multiple  platforms possibly with different integer sizes.
+
+### Guard Against Invalid Indices
 
 Consider the following code that guards against invalid indices.
 ```cpp
@@ -464,32 +576,26 @@ void work(Container& container, integer_t index)
 
 When `integer_t` is a signed type the `>=` operator is given the signed `index` parameter and the unsigned return value or `data.size()`.
 Assuming the two types are the same size, the signed `index` is converted to the unsigned type of `data.size()`.
-If `index` has a negative value then the result of the conversion is a large positive value which often will be larger than the size of the container and we enter the error reporting code block.
+If `index` has a small to moderately large negative value then the result of the conversion is a very large positive value which often will be larger than the size of the container and we enter the error reporting code block.
 However, if `index` is very negative and the container is very large then we might wrap back into the range of valid indices and perform work on a container element we shouldn't.
 
-[Some say](https://www.reddit.com/r/cpp_questions/comments/1ehc50j/comment/lfymu23/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button) , including the C++ Core Guidelines [(3)](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es102-use-signed-types-for-arithmetic), that this is not a problem, that we should pass `-Wno-sign-conversion` to the compiler, ignore the problem, and hope that it never happens.
+Some say [(1)](https://www.reddit.com/r/cpp_questions/comments/1ehc50j/comment/lfymu23/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button) , including the C++ Core Guidelines [(3)](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es102-use-signed-types-for-arithmetic), that this is not a problem, that we should pass `-Wno-sign-conversion` to the compiler, ignore the problem, and hope that it never happens.
 This is OK if we take care to eliminate all cases where a negative value can be converted to an unsigned integer type.
 I don't know how to ensure that.
 I would prefer to keep the sign-conversion warning enabled, but I'm not sure that is realistic with an signed `integer_t` type when using container types with unsigned sizes and indices such as the standard library.
 
-A problem with implicit conversion warnings is that it is not unusual that programmers try to fix them without understand the details of the code and the implication of a change [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch).
-Difficult to give an example because the issues tend to only happen in larger non-trivial codes since the mistake is obvious in isolation.
-A real world case was pieces of code from `unrar` being incorporated into Windows Defender, but with signed integers changed to unsigned which caused a security vulnerability [(72)](https://www.theregister.com/2018/04/04/microsoft_windows_defender_rar_bug/).
-A guideline is to never add a cast just because the compiler says so.
-If you do add a cast from signed to unsigned then also add a check for non-negativity and decide what to do in the case where the value is negative.
-
-Let's consider what happens with the above code if `integer_t` is unsigned instead, but we call it with a negative value, i.e the call size looks like this:
+Let's consider what happens with the guard against invalid indices code above if `integer_t` is unsigned, but we call it with a negative value, i.e the call size looks like this:
 ```cpp
 void work_on_element(Container& data)
 {
-	const integer_t index {-1};
+	integer_t const index {-1};
 
 	// This will log the error message even though index is not larger
 	// than data.size().
 	work(data, index);
 }
 ```
-When `integer_t` is a unsigned type the conversion from a negative value to a positive value happens in the initialization of `index` in `work_on_element` instead of when evaluating `>=` in `work`, but the effect is the same.
+When `integer_t` is an unsigned type the conversion from a negative value to a positive value happens in the initialization of `index` in `work_on_element` instead of when evaluating `>=` in `work`, but the effect is the same.
 The difference is the lie in the signature of `work` in the signed `integer_t` case.
 The function claims to handle negative values when in reality it does not.
 
@@ -498,106 +604,27 @@ In that case there will be no sign conversion and the comparison will work as ex
 
 When using singed `integer_t` the range check in `work` should check both sides:
 ```cpp
-if (index < 0 || index >= data.size())
+if (index < 0 || index >= std::ssize(data)) { /* Report error. */ }
 ```
 
-One source of bugs is when signed and unsigned values are mixed in an expression [(7)](https://google.github.io/styleguide/cppguide.html#Integer_Types), [(12)](https://www.sandordargo.com/blog/2023/10/11/cpp20-intcmp-utilities), [(15)](https://youtu.be/Puio5dly9N8?t=2561), [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU), [(41)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf). [(45)](https://stackoverflow.com/a/18796546), [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity).
-This leads to implicit conversions and results that are difficult to predict for many programmers.
+### Unwittingly Fixing Conversion Warnings - Don't Cast Just Because The Compiler Says You Should
 
-The problem is that C++ doesn't use the values two variables have when an operator is given variables of different types.
-Instead integer promotion [(50)](https://eel.is/c++draft/conv.prom) and the usual arithmetic conversions happen [(49)](https://eel.is/c++draft/expr.arith.conv).
-An example making the effect obvious [(19)](https://www.youtube.com/watch?v=wvtFGa6XJDU):
-```cpp
-signed int a {-1};
-unsigned int b {1};
-if (a < b)
-{
-	// Not executed.
-}
-else
-{
-	// Is executed.
-}
-```
+A problem with implicit conversion warnings is that it is not unusual that programmers try to fix them without understand the details of the code and the implication of a change [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch).
+Difficult to give an example because the issues tend to only happen in larger non-trivial codes since the mistake is obvious in isolation.
+A real world case was pieces of code from `unrar` being incorporated into Windows Defender, but with signed integers changed to unsigned which caused a security vulnerability [(72)](https://www.theregister.com/2018/04/04/microsoft_windows_defender_rar_bug/).
 
-So why is -1 not less than 1?
-What happens, in this case, is that the signed variable, which has a low value, is converted to the type of the unsigned variable [(49)](https://eel.is/c++draft/expr.arith.conv).
-See _Dangers_ > _Implicit Conversions_.
-Since the signed variable has a value not representable in unsigned type we get "garbage".
-(Not actual garbage, the value we get is well defined, but in many cases it is indistinguishable for garbage since we got a completely different value.)
-This is surprising, and arguably bad language design.
+A guideline is to never add a cast just because the compiler says you should.
+If you do add a cast from signed to unsigned then also add a check for non-negativity and decide what to do in the case where the value is negative.
+If you do add a cast from unsigned to signed then also add a check for too large values and decide what to do in the case where the value is too large.
 
-For example, the following two expressions, that use the same values, produce different results [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity).
-```cpp
-int base = 12;
-unsigned short offset = 25;
-int size = 32;
-if (base - offset < size)
-{
-	// This is true since 12 - 25 = -13, which is less than 32.
-}
-```
-The above behaves as one would expect, but change a single type to a wider one and the semantics changes completely, due to the usual arithmetic conversions, [(48)](https://en.cppreference.com/w/cpp/language/usual_arithmetic_conversions) [(49)](https://eel.is/c++draft/expr.arith.conv):
-```cpp
-int base = 12;
-unsigned int offset = 25;
-int size = 32;
-if (base - offset < size)
-{
-	// This is false since 12 - 25 = 4294967283, which greater than 32.
-}
-```
-The same happens if we make `size` unsigned instead:
-```cpp
-int base = 12;
-int offset = 25;
-unsigned int size = 32;
-if (base - offset < size)
-{
-	// This is false since 12 - 25 = 4294967283, which is greater than 32.
-}
-```
-This variant is particularly insidious if the `size` value is a function since in that case ALL values we declare are signed and a signed left hand side is computed for the comparison, but then the value is implicitly converted to unsigned and destroyed in the process.
-```cpp
-int base = 12;
-int offset = 25;
-if (base - offset < container.size())
-{
-	// This is often false since, surprisingly,
-	// 12 - 25 = 4294967283
-	// which is greater than most container sizes.
-}
-```
-To avoid this problem use `std::ssize`, which returns a singed integer, instead of `Container::size`.
-
-Make one more type change and we get the expected result again:
-```cpp
-int64_t base = 12;
-int offset = 25;
-unsigned int size = 32;
-if (base - offset < size)
-{
-	// This is true since 12 - 25 = -13, which is less than 32.
-}
-```
-In this case it is the unsigned right hand side that is converted to the type of the left hand side instead, signed, of vice versa because the left hand side has a larger bit width.
-
-A real-world example may be a line like the following [(56)](https://hamstergene.github.io/posts/2021-10-30-do-not-use-unsigned-for-nonnegativity):
-```cpp
-if (source_index - findTargetIndex() < getSize())
-```
-It is not obvious what the types are here, or what implicit conversions will happen.
-
-This type of implicit conversion become even more difficult to keep track of when using typedef'd integer types and the application support multiple  platforms possibly with different integer sizes.
-
-See _Dangers_ > _Implicit Conversions_ > _Usual Arithmetic Conversions_.
+### Avoiding Mixing Signed And Unsigned Values
 
 Assuming we are required to use signed values for some variables, some data is inherently signed [(13)](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1428r0.pdf), it follows that we want to also use a singed type for any value that is used together with the inherently signed data.
 This process repeats and a front of the signed-ness spreads like a virus across the code base until everything, or at least most things, are signed.
-Every time we introduce a variable with an unsigned integer type we risk introduce mixing with the must-be-signed values and thus introduce bugs.
+Every time we introduce a variable with an unsigned integer type we risk introducing mixing the newly introduced unsigned variable with the must-be-signed values we already have and thus introduce the possibility of bugs.
 
-Unfortunately the reverse of this is also true since the standard library uses a lot of unsigned types in its container.
-This means that a similar front of unsigned-ness spreads in the opposite direction.
+Unfortunately the reverse of this is also true since the standard library uses a lot of unsigned types in its containers.
+This means that a similar front of unsigned-ness spreads in the opposite direction, outwards from any code using such containers.
 Trouble and headaches happen where these fronts meet.
 Unless we chose to use a different set of containers that use a signed integer type instead.
 
@@ -607,23 +634,17 @@ Since we cannot, in many applications, avoid negative, and thus signed, integers
 As soon as we are given an unsigned value we check that it isn't too large and then cast it to signed.
 As soon as we need to supply an unsigned value somewhere we check that the signed value we have isn't negative and then cast it to unsigned [(31)](https://critical.eschertech.com/2010/04/07/danger-unsigned-types-used-here/).
 
-A counter-point is that if a function is so large that it becomes difficult to track which variables are signed and which are unsigned then the function should be split anyways.
+A counter-point is that if a function is so large that it becomes difficult to track which variables are signed and which are unsigned then the function should be split anyways (`citation needed`).
 Trying to force everything to the same signedness is a false sense of security.
 
 A counter-point to that is that as programmers we absolutely do not want to discard whatever we currently have in our own working memory, for example while debugging, to start analyzing the impacts of possible implicit conversions, sign extensions, and wrapping behavior.
 We want code to do what it looks like the code is doing.
 We cannot memorize an ever-growing number of tricks and idioms to make loops using unsigned counters work correctly in all edge and corner cases.
 
-One reason for why mixing signed and unsigned integers in C++ is because of unfortunate implicit conversion rules [(46)](https://stackoverflow.com/a/18248537).
-Consider
-- `unsigned - unsigned` which produces an unsigned result, and
-- `signed + unsigned` which also produces an unsigned result (except if the signed integer type has higher range than the unsigned type).
 
-If we take "unsigned" to mean "cannot be negative", i.e. "is positive", we can write
-`positive - positive is positive` and `signed + unsigned is unsigned`.
-Both of these are logically false.
-Subtracting two positive values can produce a negative value,
-and adding a positive value to a negative value may result in another negative value.
+
+
+### CONTINUE HERE
 
 Example error case:
 ```cpp
