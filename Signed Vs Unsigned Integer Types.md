@@ -436,6 +436,119 @@ bool compare_small_and_large()
 }
 ```
 
+### Guard Against Invalid Indices
+
+Consider the following code that guards against invalid indices.
+```cpp
+void work(Container& container, integer_t index)
+{
+	if (index >= container.size())
+	{
+		report_error("Index passed to work is out of range for the container.");
+		return;
+	}
+
+	// Work on container[index].
+}
+```
+
+When `integer_t` is a signed type the `>=` operator is given the signed `index` parameter and the unsigned return value or `data.size()`.
+Assuming the two types are the same size, the signed `index` is converted to the unsigned type of `data.size()` [(12)](https://www.sandordargo.com/blog/2023/10/11/cpp20-intcmp-utilities).
+If `index` has a small to moderately large negative value then the result of the conversion is a very large positive value which often will be larger than the size of the container and we enter the error reporting code block.
+However, if `index` is very negative and the container is very large then we might wrap back into the range of valid indices and perform work on a container element we shouldn't.
+
+Some say [(1)](https://www.reddit.com/r/cpp_questions/comments/1ehc50j/comment/lfymu23/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button) , including the C++ Core Guidelines [(3)](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es102-use-signed-types-for-arithmetic), that this is not a problem, that we should pass `-Wno-sign-conversion` to the compiler, ignore the problem, and hope that it never happens.
+This is OK if we take care to eliminate all cases where a negative value can be converted to an unsigned integer type.
+I don't know how to ensure that.
+I would prefer to keep the sign-conversion warning enabled, but I'm not sure that is realistic with an signed `integer_t` type when using container types with unsigned sizes and indices such as the standard library.
+
+Let's consider what happens with the guard against invalid indices code above if `integer_t` is unsigned, but we call it with a negative value, i.e the call size looks like this:
+```cpp
+void work_on_element(Container& data)
+{
+	integer_t const index {-1};
+
+	// This will log the error message even though index is not larger
+	// than data.size().
+	work(data, index);
+}
+```
+When `integer_t` is an unsigned type the conversion from a negative value to a positive value happens in the initialization of `index` in `work_on_element` instead of when evaluating `>=` in `work`, but the effect is the same.
+The difference is the lie in the signature of `work` in the signed `integer_t` case.
+The function claims to handle negative values when in reality it does not.
+
+If we want to use a signed type then we can use `std::ssize(container)` instead of `container.size()` to get the size, which will give us the size as a signed type.
+In that case there will be no sign conversion and the comparison will work as expected, i.e. `-1 >= std::ssize(data)` will always evaluate to false.
+
+When using singed `integer_t` the range check in `work` should check both sides:
+```cpp
+if (index < 0 || index >= std::ssize(data)) { /* Report error. */ }
+```
+
+Another option is to flip the test.
+Instead of detecting the error case we detect the valid case.
+```cpp
+void work(Container& container, ptrdiff_t index)
+{
+	if (index < container.size())
+	{
+		// Work with container[index].
+	}
+	else
+	{
+		report_error("Index passed to work is out of range for the container.");
+	}
+}
+```
+The effect is the same.
+
+In some cases the index we are guarding isn't a simple index parameter to be compared with a container size.
+Sometimes the index is computed and the threshold we are comparing against is another computed index.
+Consider the following example where unsigned integers are used for indices and sizes, as some suggest we do, while the value that can be negative, `block_offset`, uses a signed integer.
+The intended behavior of the function is to process a block of elements of `container` where the position of the block relative to a `base_index` determines the type of processing to perform.
+The `transition_offset` parameter controls which blocks need which type of processing.
+Blocks starting below the transition index need one type of processing while elements at or above that index need another type of processing.
+```cpp
+/**
+                    base_index             block_offset
+                        v                       3
+|-------|-------|-------|-------|-------|-------|-------|
+block_size              |---------------|
+    8                      transition
+                           offset 16
+     These need one type of processing <|> These need another type of processing.
+*/
+void work(
+	Container& container,
+	// We are responsible for the neighborhood around base_index.
+	unsigned int base_index,
+	// The index, relative to base_index, where the processing type changes.
+	unsigned int transition_offset,
+	// Which block, relative to base_index, we should process.
+	int block_offset,
+	// The size, in container elements, of each block.
+	unsigned int block_size)
+{
+	// Convert the block offset into an element offset.
+	int element_offest {block_offset * block_size};
+
+	// Determine which type of processing we should perform.
+	if (element_offset < transition_offset)
+	{
+		// Code for processing blocks before the transition.
+	}
+	else
+	{
+		// Code for processing elements at or after the transition.
+	}
+}
+```
+
+The if statement condition is essentially the same as the common `index < container.size()` that we know to be weary of when `index` is a signed integer, but the problem is easier to miss since the pattern is unfamiliar.
+The problem happens when `element_offset` becomes negative because `block_offset` is negative.
+It is not actually a problem for `element_offset` to be negative, it is not as if we are using it to index directly into the container.
+But the check still fails because `negative < unsigned` is always false, i.e. we will incorrectly enter the `after the transition` block.
+
 ### Unsigned Values Can Taint Signed Expressions
 
 An example [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned) where a single unsigned value taints an otherwise signed expression, causing an incorrect result:
@@ -558,54 +671,6 @@ It is not obvious what the types are here, or what implicit conversions will hap
 
 This type of implicit conversion become even more difficult to keep track of when using typedef'd integer types and the application support multiple  platforms possibly with different integer sizes.
 
-### Guard Against Invalid Indices
-
-Consider the following code that guards against invalid indices.
-```cpp
-void work(Container& container, integer_t index)
-{
-	if (index >= container.size())
-	{
-		report_error("Index passed to work is out of range for the container.");
-		return;
-	}
-
-	// Work on container[index].
-}
-```
-
-When `integer_t` is a signed type the `>=` operator is given the signed `index` parameter and the unsigned return value or `data.size()`.
-Assuming the two types are the same size, the signed `index` is converted to the unsigned type of `data.size()`.
-If `index` has a small to moderately large negative value then the result of the conversion is a very large positive value which often will be larger than the size of the container and we enter the error reporting code block.
-However, if `index` is very negative and the container is very large then we might wrap back into the range of valid indices and perform work on a container element we shouldn't.
-
-Some say [(1)](https://www.reddit.com/r/cpp_questions/comments/1ehc50j/comment/lfymu23/?utm_source=share&utm_medium=web3x&utm_name=web3xcss&utm_term=1&utm_content=share_button) , including the C++ Core Guidelines [(3)](https://isocpp.github.io/CppCoreGuidelines/CppCoreGuidelines#es102-use-signed-types-for-arithmetic), that this is not a problem, that we should pass `-Wno-sign-conversion` to the compiler, ignore the problem, and hope that it never happens.
-This is OK if we take care to eliminate all cases where a negative value can be converted to an unsigned integer type.
-I don't know how to ensure that.
-I would prefer to keep the sign-conversion warning enabled, but I'm not sure that is realistic with an signed `integer_t` type when using container types with unsigned sizes and indices such as the standard library.
-
-Let's consider what happens with the guard against invalid indices code above if `integer_t` is unsigned, but we call it with a negative value, i.e the call size looks like this:
-```cpp
-void work_on_element(Container& data)
-{
-	integer_t const index {-1};
-
-	// This will log the error message even though index is not larger
-	// than data.size().
-	work(data, index);
-}
-```
-When `integer_t` is an unsigned type the conversion from a negative value to a positive value happens in the initialization of `index` in `work_on_element` instead of when evaluating `>=` in `work`, but the effect is the same.
-The difference is the lie in the signature of `work` in the signed `integer_t` case.
-The function claims to handle negative values when in reality it does not.
-
-If we want to use a signed type then we can use `std::ssize(container)` instead of `container.size()` to get the size, which will give us the size as a signed type.
-In that case there will be no sign conversion and the comparison will work as expected, i.e. `-1 >= std::ssize(data)` will always evaluate to false.
-
-When using singed `integer_t` the range check in `work` should check both sides:
-```cpp
-if (index < 0 || index >= std::ssize(data)) { /* Report error. */ }
-```
 
 ### Unwittingly Fixing Conversion Warnings - Don't Cast Just Because The Compiler Says You Should
 
@@ -646,42 +711,6 @@ We cannot memorize an ever-growing number of tricks and idioms to make loops usi
 
 ### CONTINUE HERE
 
-Example error case:
-```cpp
-void work(Container& container, std::ptrdiff_t index)
-{
-	if (index < container.size())
-	{
-		report_error("Invalid index passed to work.");
-		return;
-	}
-
-	// Work with container[index].
-}
-```
-
-This will fail to reliably report an error for negative `index` even though `container.size()` can never be less than 0 so ALL negative `index` is smaller than ALL `container.size()`.
-This is because the comparison happens after implicit conversion, and the conversion is signed → unsigned [(12)](https://www.sandordargo.com/blog/2023/10/11/cpp20-intcmp-utilities). This means that `index < container.size()` compares the container size against some potentially very large positive number.
-
-Less trivial variant:
-```cpp
-void work(
-	Container& container,
-	unsigned int base_index, signed int block_offset, unsigned int block_size)
-{
-	signed int offset {block_offset * block_size};
-	if (offset < base_index)
-	{
-		// Code for processing elements before base_index.
-	}
-	else
-	{
-		// Code for processing elements at or after base_index.
-	}
-}
-```
-
-The if statement condition is essentially the same as the common `index < container.size()` that we know to be weary of when `index` is a signed integer, but the problem is easier to miss since the pattern is unfamiliar.
 
 Because of the implicit conversion rules unsigned values tend to contaminate the arithmetic in mixed signed/unsigned expressions [(45)](https://stackoverflow.com/a/18795564).
 ```cpp
