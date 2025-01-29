@@ -81,7 +81,7 @@ The second is to make the lambda object itself [[constexpr]], including construc
 ## `constexpr` Call Operator
 
 To make a lambda that can be used  in a [[constexpr]] context add `constexpr` between the parameter list the the statement list [(1)](https://youtu.be/fI2xiUqqH3Q?t=2236).
-This is implicit, i.e. not required, if the compiler can be both the `constexpr` context where the lambda is called and the lambda expression at the same time.
+This is implicit, i.e. not required, if the compiler can see both the `constexpr` context where the lambda is called and the lambda expression at the same time.
 By adding `constexpr` you are guaranteed by the compiler that the lambda is [[constexpr]] valid even if it isn't used in a `constexpr` context yet.
 [[constexpr]] lambdas was not possible before C++17.
 
@@ -97,6 +97,35 @@ constexpr auto add = [](int lhs, int rhs) { return lhs + rhs; };
 ```
 
 This is relevant if you have captures and your constructors are not trivial.
+
+
+## Example
+
+```cpp
+// A function template with a value template parameter must
+// have the value being known at compile time.
+template <int N>
+int value()
+{
+    return N;
+}
+
+int works()
+{
+	// A lambda marked constexpr can be used to select a
+	// function template instantiation.
+    constexpr auto add = [](int lhs, int rhs) constexpr { return lhs + rhs; };
+    return value<add(5, 5)>();
+}
+
+int does_not_work(int num)
+{
+	// We cannot use a non-constexpr value in a constexpr lambda.
+	// error: 'num' is not a constant expression
+    constexpr auto add = [num](int lhs, int rhs) constexpr { return lhs + rhs + num; };
+    return value<add(5, 5)>();
+}
+```
 
 
 # References
