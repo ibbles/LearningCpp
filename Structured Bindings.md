@@ -88,6 +88,7 @@ The `auto` need not be just `auto` but can be any variant supported by the regul
 - `auto`: By value even if right hand side is a reference.
 - `auto const`: Local variable is `const`.
 - `auto&`: Capture by reference.
+- `const auto&`: Capture by reference.
 - `auto&&`: Capture by TODO Name?
 
 # References
