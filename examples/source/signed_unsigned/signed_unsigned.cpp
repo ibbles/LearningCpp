@@ -1,5 +1,6 @@
 #include <iostream>
 #include <limits>
+#include <cstdint>
 #include <vector>
 
 void report_error(const char* message)
@@ -162,9 +163,63 @@ namespace signed_to_unsigned_conversion
 
 }
 
+
+
+namespace add_and_divide_by_two
+{
+	int64_t add_and_divide_by_two(int64_t a, int64_t b)
+	{
+		return (a+b) / 2;
+	}
+
+	uint64_t add_and_divide_by_two(uint64_t a, uint64_t b)
+	{
+		return (a+b) / 2;
+	}
+
+	void run()
+	{
+		std::cout << add_and_divide_by_two(5l, 5l) << '\n';
+		std::cout << add_and_divide_by_two(5ul, 5ul) << '\n';
+	}
+}
+
+namespace arithmetic_series
+{
+	__attribute((noinline))
+	uint64_t arithmetic_series(uint64_t n)
+	{
+		uint64_t sum = 0;
+		for (uint64_t i = 1; i <= n; ++i)
+		{
+			sum += i;
+		}
+		return sum;
+	}
+
+	__attribute((noinline))
+	int64_t arithmetic_series(int64_t n)
+	{
+		int64_t sum = 0;
+		for (int64_t i = 1; i <= n; ++i)
+		{
+			sum += i;
+		}
+		return sum;
+	}
+
+	void run()
+	{
+		std::cout << arithmetic_series(1024ul) << '\n';
+		std::cout << arithmetic_series(1024l) << '\n';
+	}
+}
+
 int main()
 {
 	is_valid_index::run();
 	signed_to_unsigned_conversion::run();
+	add_and_divide_by_two::run();
+	arithmetic_series::run();
 	return 0;
 }

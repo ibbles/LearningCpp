@@ -1,5 +1,11 @@
 # Motivation
 
+Let's start with a quote  [(15)](https://youtu.be/Puio5dly9N8?t=2644) from Bjarne Stroustrup, to set the stage for why this note exists.
+
+>  There are far too many integer types, there are far too lenient rules for mixing them together, and it's a major bug source, which is why I'm saying stay as simple as you can use (signed) integers until you really really need something else. 
+
+The purpose of this note is to outline what the bugs Bjarne Stroustrup is warns us about are and to learn how to identify when we _really really need something else_.
+
 C++ provides two families of integer types: signed and unsigned.
 This means that every time we need a variable, constant, or literal of integer type we also need to decide if it should be signed or unsigned.
 The purpose of this note is to discuss reasons for choosing one variant or the other, to evaluate the advantages and disadvantages of using signed or unsigned integers.
@@ -58,7 +64,7 @@ There are many reasonable sized negative values that cannot be represented by an
 
 Fixed sized integer types, which all primitive integer types are, have the drawback that they can only represent a limited range of values.
 When we try to use them outside of that range they wrap, trap, saturate, or trigger undefined behavior [(27)](https://blog.regehr.org/archives/1401).
-Typically, unsigned integers wrap while signed integer trigger undefined behavior.
+Typically, unsigned integers wrap [(88)](https://youtu.be/pnaZ0x9Mmm0?t=991) while signed integer trigger undefined behavior  [(88)](https://youtu.be/pnaZ0x9Mmm0?t=1056).
 In most cases neither of these produce the result we intended and often lead to bugs and / or security vulnerabilities [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 A notable exception is algorithms that explicitly need wrapping behavior, such as some encryption and hashing algorithms.
 If you know that you need an unsigned integer with wrapping behavior then use an unsigned integer with wrapping behavior, this note does not apply.
@@ -118,13 +124,13 @@ There are operations that are not arithmetic, such as bit shifts and Boolean log
 If the operator is not a unary operator and the operands doesn't have the same type but are at least as large as `int` then one of them will be converted to the type of the other.
 This process is called the usual arithmetic conversions.
 The way this is done is non-trivial, but for this note we simplify it to the following rules:
-- If they are the same size then the signed value is converted to the unsigned type.
+- If they are the same size then the signed value is converted to the unsigned type [(88)](https://youtu.be/pnaZ0x9Mmm0?t=1607).
 - Otherwise, the value with a smaller type is converted to the type of the larger.
 
 If you multiply an `int` and an `int64_t` then the computation will be performed using `int64_t` because `int64_t` is (typically) larger than `int`.
 If you multiply an `int` and an `unsigned int` then the computation will be performed using `unsigned int` because `int` and `unsigned int` are the same size.
 
-All arithmetic operations are performed on at least the size of the `int` type, so if any value has a type smaller than that then it is converted to `int` before evaluating the operator.
+All arithmetic operations are performed on at least the size of the `int` type, so if any value has a type smaller than that then it is converted to `int` before evaluating the operator [(88)](https://youtu.be/pnaZ0x9Mmm0?t=1515).
 This is called integer promotion.
 
 Unexpected type conversions that changes the sign of a value is a common source of bugs.
@@ -2948,6 +2954,15 @@ So we use the extra space available to unsigned integers as an overflow protecti
 
 By "safe" I mean guaranteed to have produced the mathematical result,
 the result we would have gotten with infinite precision, otherwise we are give a false return or similar.
+The standard library has a few such functions for comparisons [(71)](https://en.cppreference.com/w/cpp/utility/intcmp.html), [(88)](https://youtu.be/pnaZ0x9Mmm0?t=2750).
+- `cmp_equal`
+- `cmp_not_equal`
+- `cmp_less`
+- `cmp_less_equal`
+- `cmp_greater`
+- `cmp_greater_equal`
+
+If you are attempting to write safe arithmetic functions yourself, consider the following.
 It is easier to check for unsigned wrap around than signed overflow.
 With signed integers safe addition requires up to three of branches and an extra subtraction.
 With unsigned it is a single add instruction and a read from the status flags registry [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc?t=2910).
@@ -3924,6 +3939,43 @@ TODO Are there cases where the same is true also for unsigned integers?
 )
 
 
+## Add And Divide By 2
+
+From [(88)](https://youtu.be/pnaZ0x9Mmm0?t=354), continued at [(88)](https://youtu.be/pnaZ0x9Mmm0?t=498).
+
+We have two functions that (incorrectly [(61)](https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/)) compute the average of two integers, one using a signed type and one using an unsigned type.
+
+```cpp
+uint64_t add_and_divide_by_two(uint64_t a, uint64_t b)
+{
+	return (a+b) / 2;
+}
+
+int64_t add_and_divide_by_two(int64_t a, int64_t b)
+{
+	return (a+b) / 2;
+}
+```
+
+Let's inspect the generated assembly.
+```S
+add_and_divide_by_two::add_and_divide_by_two(unsigned long, unsigned long):
+    lea    (%rdi,%rsi,1),%rax
+    shr    $1,%rax
+    ret
+
+add_and_divide_by_two::add_and_divide_by_two(long, long):
+	add    %rsi,%rdi
+	mov    %rdi,%rax
+    shr    $0x3f,%rax
+    add    %rdi,%rax
+    sar    $1,%rax
+    ret
+```
+
+The unsigned variant is clearly shorter, and probably faster too.
+The shift by `0x3f` in the signed version is there to extract the sign bit of the computed sum, which is then added back.
+This is to ensure that we get correct rounding for odd numbers [(88)](https://youtu.be/pnaZ0x9Mmm0?t=1383).
 
 ## Dividing By A Power Of Two
 
@@ -4083,6 +4135,90 @@ Thus the closed form solution cannot be used and the compiler must emit instruct
 That means that for any non-tiny `n` the signed integer version will be much faster.
 
 
+## Arithmetic Series
+
+[(88)](https://youtu.be/pnaZ0x9Mmm0?t=2017)
+```cpp
+uint64_t arithmetic_series(uint64_t n)
+{
+	uint64_t sum = 0;
+	for (uint64_t i = 1; i <= n; ++i)
+	{
+		sum += i;
+	}
+	return sum;
+}
+
+int64_t arithmetic_series(int64_t n)
+{
+	int64_t sum = 0;
+	for (int64_t i = 1; i <= n; ++i)
+	{
+		sum += i;
+	}
+	return sum;
+}
+```
+
+This example is meant to show that since unsigned integers has well-defined wrapping behavior the compiler must put an actual loop into the assembly, while for signed integers where overflow is undefined the compiler can assume that the result will fit within the domain of the signed type used and thus can use the closed form expression `n(n+1)/2` instead of doing the loop.
+However, with GCC 15.2 I get a loop in both cases.
+And the `unsigned` function has way more assembly code than the presenter is showing on his slide  [(88)](https://youtu.be/pnaZ0x9Mmm0?t=2110).
+Not sure what is going on here.
+
+```S
+arithmetic_series::arithmetic_series(unsigned long):
+        test    rdi, rdi
+        je      .L4
+        lea     rcx, [rdi-1]
+        mov     edx, 1
+        mov     eax, 2
+        cmp     rdi, 2
+        jb      .L1
+        and     ecx, 1
+        je      .L3
+        mov     edx, 3
+        mov     eax, 3
+        cmp     rdi, 3
+        jb      .L1
+.L3:                                  # Start of loop
+        lea     rdx, [rdx+1+rax*2]
+        add     rax, 2
+        cmp     rdi, rax
+        jnb     .L3                   # End of loop
+.L1:
+        mov     rax, rdx
+        ret
+.L4:
+        xor     edx, edx
+        mov     rax, rdx
+        ret
+
+arithmetic_series::arithmetic_series(long):
+        test    rdi, rdi
+        jle     .L16
+        lea     rcx, [rdi+1]
+        xor     edx, edx
+        and     edi, 1
+        mov     eax, 1
+        je      .L15
+        mov     eax, 2
+        mov     edx, 1
+        cmp     rax, rcx
+        je      .L13
+.L15:                                 # Start of loop.
+        lea     rdx, [rdx+1+rax*2]
+        add     rax, 2
+        cmp     rax, rcx
+        jne     .L15                  # End of loop.
+.L13:
+        mov     rax, rdx
+        ret
+.L16:
+        xor     edx, edx
+        mov     rax, rdx
+        ret
+```
+
 ## Type Replacement
 
 (
@@ -4185,7 +4321,8 @@ A quote from Bjarne Stroustrup [(15)](https://youtu.be/Puio5dly9N8?t=2644):
 
 To make it clear when a conversion is happening, always use `static_cast` instead of relying on implicit conversions.
 
-Build with `-Wconversion`.
+Build with at least `-Wconversion`, preferably `-Wall -Wextra -pedantic -Werror` [(88)](https://youtu.be/pnaZ0x9Mmm0?t=2321).
+Build with sanitizers: `-fsanitize=signed-integer-overflow,unsigned-integer-overflow` [(88)](https://youtu.be/pnaZ0x9Mmm0?t=2516).
 Use a library for sane signed+unsigned comparisons [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch), [(71)](https://en.cppreference.com/w/cpp/utility/intcmp).
 
 Use a signed type and use one with more range than you think you need [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
@@ -4209,7 +4346,7 @@ Error conditions can be prevented or detected using:
 
 ## Alternatives To Indexing
 
-Don't use explicit indices at all, do something else instead.
+Don't use explicit indices at all, do something else instead [(88)](https://youtu.be/pnaZ0x9Mmm0?t=2916).
 
 - Range based for loops.
 	- Less flexible than index-based loops.
@@ -4429,4 +4566,5 @@ Not sure that this is a good idea.
 - 85: [_P2809R2 Trivial infinite loops are not Undefined Behavior_ by JF Bastien @ open-std.org 2023](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2023/p2809r2.html)
 - 86: [_Divide a signed integer by a power of 2_ by Gustavo Blehart, aka.nice @ stackoverflow.com 2016](https://stackoverflow.com/questions/39691817/divide-a-signed-integer-by-a-power-of-2)
 - 87: [_Alex Dathskovsky :: To Int or to Uint, This is the Question_ by Alex Dathskovsky, CoreCppIL @  youtube.com 2023](https://www.youtube.com/watch?v=Iz2UOgLMj58)
+- 88: [_To Int or to Uint, This is the Question - Alex Dathskovsky - CppCon 2024_ by Alex Dathskovsky, CppCon @ youtube.com 2024](https://www.youtube.com/watch?v=pnaZ0x9Mmm0)
 
