@@ -61,13 +61,13 @@ std::string to_string(T value)
 	{
 		return std::to_string(value);
 	}
-	else if constexpr (std::is_save_v<T, std::string>)
+	else if constexpr (std::is_same_v<T, std::string>)
 	{
 		return x;
 	}
 	else
 	{
-		return st::string(x);
+		return std::string(x);
 	}
 }
 

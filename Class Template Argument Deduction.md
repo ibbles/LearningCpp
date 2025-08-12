@@ -59,7 +59,7 @@ namespace std
 {
 	template <typename It>
 	vector(It begin, It end)
-		-> vector<typename std::iterator_traits<It>::value_tpe>;
+		-> vector<typename std::iterator_traits<It>::value_type>;
 ```
 This says that when a `std::vector>` is initialized with two iterators then we get a vector of whatever the type iterators' value type is, not a vector of iterators.
 
