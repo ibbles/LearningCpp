@@ -2,9 +2,11 @@
 
 Let's start with a quote  [(15)](https://youtu.be/Puio5dly9N8?t=2644) from Bjarne Stroustrup, to set the stage for why this note exists.
 
->  There are far too many integer types, there are far too lenient rules for mixing them together, and it's a major bug source, which is why I'm saying stay as simple as you can use (signed) integers until you really really need something else. 
+>  There are far too many integer types, there are far too lenient rules for mixing them together, and it's a major bug source
 
-The purpose of this note is to outline what the bugs Bjarne Stroustrup is warns us about are and to learn how to identify when we _really really need something else_.
+The purpose of this note is to outline what bugs Bjarne Stroustrup is warning us about and how to avoid them.
+He goes on to say that we should favor signed integer types over unsigned ones, but use unsigned types when we need them.
+The purpose of this note is to find out if I agree with that statement, and to find out what _"need them"_ really means.
 
 C++ provides two families of integer types: signed and unsigned.
 This means that every time we need a variable, constant, or literal of integer type we also need to decide if it should be signed or unsigned.
@@ -49,13 +51,17 @@ Some data is inherently signed.
 Sometimes we need to use such data to compute indices or sizes (citation needed).
 By making the container interface unsigned we force unsigned values upon the user,
 we make the decision for them.
+This leads to a type-clash somewhere.
+More on this under _HEADING HERE_.
 
 Is this more of a problem than the opposite? Forcing signed values upon the user?
 It is if the range of the signed type can be assumed to be large enough.
-All not-too-large unsigned values can be represented in a signed value.
-The conversion is safe.
+All not-too-large unsigned values can be represented as a signed value.
+The conversion is "safe".
 The same is not true for signed to unsigned.
 There are many reasonable sized negative values that cannot be represented by an unsigned type.
+So should we therefore prefer signed values in our interfaces so that more (real-world?) value conversions can be performed?
+It is, however, always _defined_ to convert a signed integer to an unsigned one, though the value is not always preserved.
 
 
 # Integer Basics
@@ -64,10 +70,10 @@ There are many reasonable sized negative values that cannot be represented by an
 
 Fixed sized integer types, which all primitive integer types are, have the drawback that they can only represent a limited range of values.
 When we try to use them outside of that range they wrap, trap, saturate, or trigger undefined behavior [(27)](https://blog.regehr.org/archives/1401).
-Typically, unsigned integers wrap [(88)](https://youtu.be/pnaZ0x9Mmm0?t=991) while signed integer trigger undefined behavior  [(88)](https://youtu.be/pnaZ0x9Mmm0?t=1056).
+According to the C++ standard [(91)](http://eel.is/c++draft/basic.fundamental#note-2), unsigned integers wrap [(88)](https://youtu.be/pnaZ0x9Mmm0?t=991) while signed integer trigger undefined behavior  [(88)](https://youtu.be/pnaZ0x9Mmm0?t=1056).
 In most cases neither of these produce the result we intended and often lead to bugs and / or security vulnerabilities [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 A notable exception is algorithms that explicitly need wrapping behavior, such as some encryption and hashing algorithms.
-If you know that you need an unsigned integer with wrapping behavior then use an unsigned integer with wrapping behavior, this note does not apply.
+If you know that you need an unsigned integer with wrapping behavior then use an unsigned integer with wrapping behavior, other conclusions in this note does not apply.
 
 Where on the number line the representable values are placed varies between signed and unsigned integers, and between integer types with different bit widths.
 A signed integer type is one that can represent both positive and negative numbers, including zero.
@@ -177,12 +183,17 @@ I believe all of these trigger undefined behavior.
 - Division by zero.
 	- The integer types doesn't have a value representing infinity or NaN.
 - Shift by more than the bit width.
+- Shift by a negative number of bits [(89)](https://blog.robertelder.org/signed-or-unsigned/).
+- Left-shift a negative value.
+	- At least that is what [someone on stack-overflow wrote](https://stackoverflow.com/questions/8415895/is-left-and-right-shifting-negative-integers-defined-behavior), I don't see it in the [standard](http://eel.is/c++draft/expr.shift) though.
 - Multiplying or dividing (I think) the smallest signed integer by  -1.
 	- Because the range of negative values is larger than the range of positive values. The smallest negative value doesn't have a corresponding positive value.
 	- (So why is only multiply and divide illegal? Why not also unary minus? Or is that also illegal?)
-- Multiplying two unsigned integers with size smaller than `int` with a result out of range for `int`.
+- Multiplying two unsigned integers with size smaller than `int` with a result out of range for `int` [(95)](https://jeffhurchalla.com/2019/01/16/c-c-surprises-and-undefined-behavior-due-to-unsigned-integer-promotion/).
 	- This is because integers smaller than `int` are promoted to `int` before use, which means that the operation is subjected to all the limitations of signed integer arithmetic, including overflow being undefined behavior. This is problematic with multiplication because, on a platform where `int` is 32-bit, there are `uint16_t` values that when multiplied produces a result larger than `std::numeric_limits<int>::max`, and thus overflow, and thus undefined behavior.
 	- So we cannot say "unsigned integers wrap on overflow" because that is not true for unsigned types smaller than `int` but large enough that a product between two values may overflow the range of `int`.
+- Any signed arithmetic expression that produces a result (including intermediate results?) outside of the range of the type [90](https://blog.robertelder.org/signed-or-unsigned/).
+	- It is very difficult to prove, or even reasonable argue, that a non-trivial program is free of such expression for all possible inputs.
 
 
 # Standard Library
@@ -365,6 +376,107 @@ uint8_t add_uint8(uint8_t lhs, uint8_t rhs)
 
 This conversion only happens up to the size of `int`.
 If you do the same operations where `c1`, `c2`, and `c3` are all `int` and the initial values chosen so that the `c1 * c2` multiplication overflows then your application is toast, as you have triggered undefined behavior.
+
+Another source of confusion and bugs is when mixing stored values and temporaries [95](https://jeffhurchalla.com/2019/01/16/c-c-surprises-and-undefined-behavior-due-to-unsigned-integer-promotion/).
+```cpp
+void work(short a, short b)
+{
+	short sum;
+	if (/* Some condition. */)
+	{
+		sum = a + b;
+	}
+	else
+	{
+		sum = /* Some expression not 'a + b'.*/;
+	}
+
+	if (sum == a + b)
+	{
+		// This block is not always executed when we might expect it to.
+	}
+}
+```
+
+Even when we enter the `sum = a + b` block the `sum == a + b` expression will not evaluate to `true`.
+This is because we are comparing values of different types, even though all variables are of type `short`.
+Due to integer promotion, the type of `a + b` is `int`, not `short`.
+If `a + b` is larger than `std::numeric_limits<unsigned short>::max()` then `sum` will hold the truncated value but `a + b` in `sum == a + b` will not, it will hold the full value.
+So `sum` and `a + b` are not equal and we will not enter the conditional.
+Notices that we are not intentionally mixing signed and unsigned values here, the compiler is mixing them for us.
+What the compiler produces:
+```cpp
+void work(short a, short b)
+{
+	unsigned short sum;
+	if (/* Some condition. */)
+	{
+		int __tmp = static_cast<int>(a) + static_cast<int>(b);
+		sum = static_cast<short>(__tmp); // May truncate.
+	}
+	else
+	{
+		sum = /* Some expression not 'a + b'.*/;
+	}
+
+	int __tmp = static_cast<int>(a) + static_cast<int>(b);
+	if (sum == __tmp) // '__tmp' was not truncated.
+	{
+		// This block is not always executed when we might expect it to.
+	}
+}
+```
+
+Let's analyse the assembly code for a reduced example that has the same issue:
+```cpp
+int work(short a, short b)
+{
+	short sum = a + b;
+	if (sum == a + b)
+	{
+		return 1;
+	}
+    else
+    {
+        return 0;
+    }
+}
+```
+
+```S
+work(short, short):
+        lea     eax, [rdi+rsi] # eax = a + b, in 32-bit.
+        movsx   esi, si        # Sign-extend 16-bit a to 32-bit.
+        movsx   edi, di        # Sign-extend 16-bit b to 32-bit.
+        cwde                   # Sign-extend 16-bit eax into 32-bit eax.
+                               # This truncates the 32-bit a + b to 16 bit.
+        add     edi, esi       # edi (32-bit a) += esi (32-bit b).
+                               # At this point eax holds 16-bit a + b
+                               # and edi holds 32-bit a + b.
+        cmp     eax, edi       # Compare 16-bit a + b with 32-bit a + b.
+        sete    al             # Store result of comparison in return register.
+        movzx   eax, al        # Zero-extend return register to the return type int.
+        ret
+```
+
+
+Multiplication is extra dangerous because the product of two large values in a small type, such as `unsigned short`, can result in an overflow in the computation of the promoted values [95](https://jeffhurchalla.com/2019/01/16/c-c-surprises-and-undefined-behavior-due-to-unsigned-integer-promotion/).
+```cpp
+int work(unsigned short a, unsigned short b)
+{
+	unsigned short product = a * b;  // Undefined behavior if 'a * b > INT_MAX'.
+}
+```
+
+It doesn't help us that unsigned integer overflow is well defined since there  is no unsigned integer computation happening here, only signed. 
+A workaround is to manually cast to a large-enough signed type first and then truncate the computed product.
+```cpp
+int work(unsigned short a, unsigned short b)
+{
+	unsigned short product = static_cast<unsigned short>(static_cast<unsigned int>(a) * static_cast<unsigned int>(b);
+}
+```
+That's just lovely :(
 
 Integer promotion doesn't require two operands, it applies also to unary operators as well.
 Consider
@@ -2657,6 +2769,30 @@ bool can_add(std::ptrdiff_t base, std::ptrdiff_t offset)
 
 Similar checks exists for subtraction and multiplication as well [(37)](https://wiki.sei.cmu.edu/confluence/display/c/INT30-C.+Ensure+that+unsigned+integer+operations+do+not+wrap).
 
+A case that is difficult to handle is when we have a function that uses signed integers for its parameters but user code is using unsigned integers and pass us a value that is too large for the signed integer type [(90)](https://blog.robertelder.org/signed-or-unsigned-part-2/).
+```cpp
+bool work(ptrdiff_t index)
+{
+	if (index < 0 || index > SOME_VERY_LARGE_NUMBER)
+	{
+		std::cerr << "work: Index out of range." << '\n';
+		return false;
+	}
+}
+
+void do_work()
+{
+	size_t index = /* Expression. */
+	// 'index' could be larger than std::numeric_limits<ptrdiff_t>::max().
+	// That would be bad.
+	work(index);
+}
+```
+
+In this case we have undefined behavior and no way to detect it in `work`.
+If the operations are performed as-written by the CPU then `work` would see `index` as a negative value and reject it, but we have no guarantee of that.
+Ensure you are compiling with `-Wsign-conversion`, which will catch this.
+
 
 ### Detecting Underflow
 
@@ -2668,7 +2804,7 @@ When a signed expression unintentionally produces a negative values we can detec
 That makes error reporting easier, and thus more prevalent [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 With unsigned integers we can't do that since there can't be any negative values [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone), [(62)](https://news.ycombinator.com/item?id=29766658).
 That means bad values can more easily pass deeper into our code while doing something wrong [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned), possibly leading to security vulnerabilities.
-The original bug is the same, but the impact is different.
+The original fault is the same, but the failure is different.
 
 In the following the `Container::Container(std::size_t size)` constructor creates a container with `size` elements.
 ```cpp
@@ -2818,6 +2954,9 @@ void work(const Container& container, std::size_t index)
 What should `VERY_LARGE_NUMBER` be set to?
 The smaller we set it to the more cases of underflow we are able to detect, but we also further restrict the set of allowed sizes for the container.
 The larger we set it the bigger containers we support, but we risk missing underflows that wrap past the zero/max boundary and incorrectly enter into the legal range again.
+Annex K of the C standard introduces the type `rsize_t` [(94)](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1080.pdf) and the value `RSIZE_MAX` of type `rsize_t` that is intended for this precise use-case [(39)](https://wiki.sei.cmu.edu/confluence/display/c/INT01-C.+Use+size_t+or+rsize_t+for+all+integer+values+representing+the+size+of+an+object).
+Meyers [(94)](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1080.pdf)  discusses the reasons for wanting an upper limit on "reasonable" values of a `size_t` variable and what that limit might be, but doesn't settle on an actual number.
+An analysis of the described bounds checking interfaces is provided by O'Donnel and Sebor [(42)](https://open-std.org/jtc1/sc22/wg14/www/docs/n1967.htm)
 
 Signed types also has the same problem, but it is less frequent in practice (`citation needed`) since the underflow happens much farther away from commonly used numbers [(57)](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned).
 For unsigned types the underflow happens near 0 and a lot of real-world arithmetic is done near 0.
@@ -2826,7 +2965,7 @@ Also, underflow with signed integer types is undefined behavior.
 The result is that using a signed integer type is similar to setting `VERY_LARGE_NUMBER` to the halfway-point between 0 and the maximum representable value.
 So when using unsigned integers for indices we have the flexibility to set `VERY_LARGE_NUMBER` larger than that and thereby support larger containers.
 
-if we know the maximum value a parameter may have, such as when indexing in to a container, then we can use the size of the container to detect invalid values.
+If we know the maximum value a parameter may have, such as when indexing in to a container, then we can use the size of the container to detect invalid values.
 This does not work when the container doesn't have a size yet, such as when first allocating it.
 In that case we have nothing to compare against and if a "negative" value is computed and passed to the allocation function then we will get a lot more memory than we expected,
 or a memory allocation error.
@@ -2904,9 +3043,11 @@ This can result in a hard to track down bug since it only manifests with large d
 something that in many projects isn't as broadly tested in unit tests and only happens in production.
 
 A signed integer underflow is just as difficult to test for as an unsigned one.
+(
+Worse, actually, since signed integer underflow is undefined behavior.
+)
 The difference is that the edge where the underflow happens is much farther away from common values for signed integers than it is for unsigned integers.
 For unsigned integers the edge is at 0, for signed integers it is at some large negative number.
-
 
 
 ### Tool-Assisted Runtime Under- And Overflow Detection
@@ -3350,7 +3491,7 @@ This works for all unsigned values (citation/test needed) as long as `low` is le
 
 # Compiler Optimizations
 
-Since signed integer under- and overflow is undefined behavior the compiler can optimize based on this knowledge.
+Since signed integer under- and overflow is undefined behavior the compiler can optimize based on this knowledge [(89)](https://blog.robertelder.org/signed-or-unsigned/).
 For example it can assume that `index + 1` is greater than `index` and that `container[index]` is next to both `container[index - 1]` and `container[index + 1]`.
 This is not true for unsigned types since both `- 1` and `+ 1` can cause the value to wrap around.
 This can make auto-vectorization more difficult [(14)](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing).
@@ -3790,6 +3931,12 @@ BENCHMARK(SumSizeUInt);
 
 If the compiler can know that a variable will not overflow because it is a signed integer then it can apply optimizations that depend on regular repeated arithmetic operations behave "as expected" [(74)](https://www.linkedin.com/pulse/int-uint-question-alex-dathskovsky-).
 With unsigned integers that is not possible since the value is allowed to wrap, wrecking havoc with any numerical analysis.
+
+(
+The following is a duplicate of _Arithmetic Series_ below.
+Merge them under _Arithmetic Series_.
+)
+
 Here is an example of a loop that has a closed form solution if we know that all operations will be performed "as expected".
 ```cpp
 
@@ -4137,6 +4284,11 @@ That means that for any non-tiny `n` the signed integer version will be much fas
 
 ## Arithmetic Series
 
+(
+This is a duplicate of an example in the top block of _Compiler Optimizations_.
+Move any information present there but missing here into the text below.
+)
+
 [(88)](https://youtu.be/pnaZ0x9Mmm0?t=2017)
 ```cpp
 uint64_t arithmetic_series(uint64_t n)
@@ -4290,6 +4442,13 @@ We should not allow programmers to switch their brains off because signed overfl
 Good tools create weak programmers, programming should be tough [(29)](https://stackoverflow.com/questions/30395205/why-are-unsigned-integers-error-prone).
 It is what God intended [(34)](https://www.youtube.com/watch?v=Fa8qcOd18Hc).
 
+Well-defined, standard compliant, wrong code is wrong 24/7 365 days a year and it will always produce exactly the same wrong answer [(95)](https://blog.robertelder.org/signed-or-unsigned-part-2/).
+This makes it possible to reproduce and fix bugs reported in the wild.
+Unsigned integers are well-defined in more cases, signed integers have more operations that are undefined.
+So by writing our code using unsigned integers we can be sure that any problem discovered will continue to be a problem until it is fixed.
+Any problem due to undefined behavior with signed integers risk go unnoticed until something changes, and the code may not behave the same on our developer machines as it does on end-user's machines.
+
+
 ## Reasons For Using Signed
 
 An appeal to authority argument but I include it anyway to counter the "the standard library designers chose unsigned and they are experts" argument in favor of unsigned integers.
@@ -4322,6 +4481,7 @@ A quote from Bjarne Stroustrup [(15)](https://youtu.be/Puio5dly9N8?t=2644):
 To make it clear when a conversion is happening, always use `static_cast` instead of relying on implicit conversions.
 
 Build with at least `-Wconversion`, preferably `-Wall -Wextra -pedantic -Werror` [(88)](https://youtu.be/pnaZ0x9Mmm0?t=2321).
+There is also `-Wsign-compare` and `-Wsign-conversion`, and `-Wfloat-conversion`.
 Build with sanitizers: `-fsanitize=signed-integer-overflow,unsigned-integer-overflow` [(88)](https://youtu.be/pnaZ0x9Mmm0?t=2516).
 Use a library for sane signed+unsigned comparisons [(70)](http://ithare.com/c-thoughts-on-dealing-with-signedunsigned-mismatch), [(71)](https://en.cppreference.com/w/cpp/utility/intcmp).
 
@@ -4455,9 +4615,10 @@ Should carry valid range information, and do runtime checks to enforce it [(68)]
 
 # Signed Overloads In The Standard Library
 
-A suggestion is to add
+A suggestion is to add signed variants to the unsigned size and integer functions in the standard library.
+- `std::ssize` [(40)](https://www.open-std.org/JTC1/SC22/WG21/docs/papers/2019/p1227r1.html) 
 - `std::ptrdiff_t ssizeof`
-- `std::ptrdiff_t std::vector<T>::ssize()`
+- `std::ptrdiff_t std::vector<T>::ssize()` [(93)](https://www.open-std.org/JTC1/SC22/WG21/docs/papers/2019/p1227r1.html)
 - `T& std::vector<T>::operator[](ptrdiff_t)`
 
 A similar change is [advised against](https://eigen.tuxfamily.narkive.com/ZhXOa82S/signed-or-unsigned-indexing#post3) for Eigen by Benoit:
@@ -4518,6 +4679,7 @@ Not sure that this is a good idea.
 - 37: [_SEI Cert C Coding Standard_ > _INT30-C. Ensure that unsigned integer operations do not wrap_ by Robert Seacord, Michal Rozenau @ sei.cmu.edu 2023](https://wiki.sei.cmu.edu/confluence/display/c/INT30-C.+Ensure+that+unsigned+integer+operations+do+not+wrap)
 - 38: [_Firefox 2.0 SVG "_cairo_pen_init" Heap Overflow_ by tommy @ bugzilla.mozilla.org 2006](https://bugzilla.mozilla.org/show_bug.cgi?id=360645)
 - 39: [_SEI CERT C Coding Standard_ > _INT01-C. Use rsize_t or size_t for all integer values representing the size of an object_ by Rober C. Seacord, David Svoboda @ sei.cmu.edu 2023](https://wiki.sei.cmu.edu/confluence/display/c/INT01-C.+Use+rsize_t+or+size_t+for+all+integer+values+representing+the+size+of+an+object)
+	- [Alternative link](https://wiki.sei.cmu.edu/confluence/display/c/INT01-C.+Use+size_t+or+rsize_t+for+all+integer+values+representing+the+size+of+an+object)
 - 40: [_P1227: Signed ssize() functions, unsigned size() functions (Revision 2)_ by Jorg Brown @ open-std.org 2019](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2019/p1227r2.html)
 - 41 [_Sizes Should Only span Unsigned_ by Robert Douglas, Nevin Liber, Marshall Clow @ open-std.org 2018](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2018/p1089r2.pdf)
 - 42:  [_N1967: Field Experience With Annex K - Bounds Checking Interfaces_ by Carlos O'Donell, Martin Sebor @ open-std.org 2015](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1967.htm)
@@ -4538,7 +4700,7 @@ Not sure that this is a good idea.
 - 57: [_Almost Always Unsigned_ by graphitemaster et.al. @ reddit.com/cpp 2022](https://www.reddit.com/r/cpp/comments/rtsife/almost_always_unsigned/)
 - 58: [_Torsors Made Easy_ by John Baez @ math.ucr.edu/ 2009](https://math.ucr.edu/home/baez/torsors.html)
 - 59: [_What is size_t in C?_ by Vijay. Alok Singhal, Jason Oster, et.al @ stackoverflow.com 2010](https://stackoverflow.com/questions/2550774/what-is-size-t-in-c/2551647#2551647)
-- 60: [_Choosing the type of Index Variables_ by sarat et.al @ stackoverflow.com 2011]((https://softwareengineering.stackexchange.com/questions/104591/choosing-the-type-of-index-variables)
+- 60: [_Choosing the type of Index Variables_ by sarat et.al @ stackoverflow.com 2011](https://softwareengineering.stackexchange.com/questions/104591/choosing-the-type-of-index-variables)
 - 61: [_Extra, Extra - Read All About It: Nearly All Binary Searches and Mergesorts are Broken_ by Joshua Bloch @ research.google.com/blog](https://research.google/blog/extra-extra-read-all-about-it-nearly-all-binary-searches-and-mergesorts-are-broken/)
 - 62: [_Almost Always Unsigned_ comments @ news.ycombinator.com 2022](https://news.ycombinator.com/item?id=29766658)
 - 63: [_Supplemental Integer Safety_ by David Svoboda @ open-std.org 2021](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n2868.pdf)
@@ -4567,4 +4729,10 @@ Not sure that this is a good idea.
 - 86: [_Divide a signed integer by a power of 2_ by Gustavo Blehart, aka.nice @ stackoverflow.com 2016](https://stackoverflow.com/questions/39691817/divide-a-signed-integer-by-a-power-of-2)
 - 87: [_Alex Dathskovsky :: To Int or to Uint, This is the Question_ by Alex Dathskovsky, CoreCppIL @  youtube.com 2023](https://www.youtube.com/watch?v=Iz2UOgLMj58)
 - 88: [_To Int or to Uint, This is the Question - Alex Dathskovsky - CppCon 2024_ by Alex Dathskovsky, CppCon @ youtube.com 2024](https://www.youtube.com/watch?v=pnaZ0x9Mmm0)
-
+- 89: [_Should I use Signed or Unsigned Ints In C? (Part 1)_ by Robert Elder @ robertelder.org 2015](https://blog.robertelder.org/signed-or-unsigned/)
+- 90: [_Should I use Signed or Unsigned Ints In C? (Part 2)_ by  Robert Elder @ robertelder.org 2015](https://blog.robertelder.org/signed-or-unsigned-part-2/)
+- 91: [_C++ Standard Draft_ > _Basic_ > _Fundamental_ @ eel.is](http://eel.is/c++draft/basic.fundamental)
+- 92: [_Consistency for size() functions: Add ranges::ssize_ by HAnnes Hauswedell et.al. @ open-std.org 2020](https://www.open-std.org/jtc1/sc22/wg21/docs/papers/2020/p1970r2.html).
+- 93: [_P1227: Signed ssize() functions, unsigned size() functions (Revision 1)_ by Jorg Brown @ open-std.org 2019](https://www.open-std.org/JTC1/SC22/WG21/docs/papers/2019/p1227r1.html)
+- 94: [_Limited `size_t`_ (a.k.a. `rsize_t`) by Randy Meyers @ open-std.org 2004](https://www.open-std.org/jtc1/sc22/wg14/www/docs/n1080.pdf)
+- 95: [_[C/C++] Surprises and Undefined Behavior From Unsigned Integer Promotion_ by Jeffrey Hurchalla @ jeffhurchalla.com 2019](https://jeffhurchalla.com/2019/01/16/c-c-surprises-and-undefined-behavior-due-to-unsigned-integer-promotion/)
